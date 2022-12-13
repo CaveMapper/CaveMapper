@@ -394,7 +394,7 @@ def cs_model_pre_prs(obj):
     
     create_images(image_size)
     create_material_CrossSection()
-    generate_scale(scale_length,0.01)
+    generate_scale(scale_length,0.002)
     bpy.context.view_layer.objects.active = obj
     # set material
     for num in range(len(obj.material_slots))[::-1]:
@@ -404,13 +404,40 @@ def cs_model_pre_prs(obj):
     for material in bpy.data.materials:
         if material.name == 'CrossSection':
             bpy.context.object.data.materials.append(material)
-    #UV unwrap
+    
+    #Join scale_plane obj to cs_model
+    obj.select_set(True)
     bpy.data.objects['scale_plane'].select_set(True)
+    bpy.ops.object.join()
+
+    #UV unwrap
     bpy.ops.object.mode_set(mode='EDIT', toggle=False)
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.context.scene.tool_settings.use_uv_select_sync = True
     bpy.ops.uv.unwrap(method='ANGLE_BASED', margin=0.001)
     bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+
+    #separate scale_plane
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+    meshdata = bmesh.from_edit_mesh(obj.data)
+    meshdata.select_mode = {'FACE'}
+    bpy.ops.mesh.select_all(action='DESELECT')
+    meshdata.faces.ensure_lookup_table()
+    meshdata.faces[len(meshdata.faces)-1].select_set(True)
+    bpy.ops.mesh.separate(type='SELECTED')
+
+    #rename and replace collection
+    for ob in bpy.context.selected_objects :
+        if ob != bpy.context.active_object:
+            ob.name = 'scale_plane'
+            for collection in bpy.data.collections:
+                checklink = collection.objects.get(ob.name)
+                if checklink != None:
+                    collection.objects.unlink(ob)
+            destinationcollection = bpy.data.collections.get('Scale')
+            destinationcollection.objects.link(ob)
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+
 
 def generate_scale(L,t):
     #initalize collection
@@ -837,7 +864,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Shota Kotake",
-    "version": (1, 2),
+    "version": (1, 30),
     "blender": (3, 0, 1),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
