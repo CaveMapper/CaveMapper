@@ -864,7 +864,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Shota Kotake",
-    "version": (1, 30),
+    "version": (1, 31),
     "blender": (3, 0, 1),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -891,12 +891,10 @@ class import_models(bpy.types.Operator):
         
         #import glb files
         scene = bpy.context.scene
-        folder_path = scene.folder_path           
         
         ext_str = "glb"
-        folderPath = folder_path
-        
-        print(folderPath)
+        folderPath = bpy.path.abspath(scene.folder_path)
+
         filesPathList = glob.glob(folderPath + "\\*." + ext_str)
         i = 0
         for filePath in filesPathList:
