@@ -442,14 +442,19 @@ def cs_model_pre_prs(obj):
 def generate_scale(L,t):
     #initalize collection
     scale_collection = make_object_collection('Scale')
-    scale_collection.hide_viewport = False
+
+    vlayer = bpy.context.view_layer
+    vlayer.layer_collection.children['Scale'].hide_viewport = False
+
     for c in bpy.data.collections:
         if c.name == scale_collection.name:
             bpy.ops.object.select_all(action='DESELECT')
-            for remove_obj in c.all_objects:                
+            for remove_obj in c.all_objects:
+                remove_obj.hide_set(False)
                 remove_obj.select_set(True)
             bpy.ops.object.delete() # Delete object
-    
+
+
     #generate_sclae_line
     r = 0.5 * t * L
     line_obj_name = 'scale_line'
@@ -541,9 +546,6 @@ def generate_scale(L,t):
         for material in bpy.data.materials:
             if material.name == 'CrossSection':
                 bpy.context.object.data.materials.append(material)
-    
-    #scale_collection.hide_viewport = True
-    
             
 ################################################################################
 #generate materials, images and composite
@@ -864,7 +866,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Shota Kotake",
-    "version": (1, 31),
+    "version": (1, 32),
     "blender": (3, 0, 1),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
