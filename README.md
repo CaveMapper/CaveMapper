@@ -10,15 +10,6 @@ CaveMapperには以下の機能が含まれる。
 ・断面図作成
 
 ## インストール方法及び使用方法
-1. GitHubから以下3つのファイルをダウンロードする。
-
-　・iPhoneのLiDARによる洞窟3Dスキャン入門
- 
-　・CaveMapperマニュアル
- 
-　・CaveMapper.py
- 
-2. LiDAR搭載i-Phoneを用いた洞窟の3Dスキャン作業の方法は、「iPhoneのLiDARによる洞窟3Dスキャン入門」を読むこと。
-
-3. 「CaveMapper.py」がBlenderアドオンファイルである。のインストール方法及び使用方法については、「CaveMapperマニュアル」を読むこと。
+インストール方法及び使用方法は
+<a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP">こちら</a>を参照すること。
 
