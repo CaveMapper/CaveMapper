@@ -11,5 +11,5 @@ CaveMapperには以下の機能が含まれる。
 
 ## インストール方法及び使用方法
 インストール方法及び使用方法は
-<a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP"><span style="font-size: 200%;">こちら</span></a>を参照すること。
+<a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" style="font-size: 200%;">こちら</a>を参照すること。
 
