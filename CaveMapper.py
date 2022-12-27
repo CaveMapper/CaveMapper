@@ -13,8 +13,10 @@ import numpy as np
 import open3d as o3d
 import copy
 import time
+import math
 import glob
 import os
+import mathutils
 from mathutils import Color
 from mathutils import Vector
 
@@ -25,6 +27,129 @@ def setObjColor(i):
     c.hsv = (i % h_div)/h_div,0.8, 1.0
     
     return (c.r,c.g,c.b,1)
+
+#######################################################################
+#Transform interpolation functions
+#######################################################################
+def tfm_to_quat(tfm):
+    r11 = tfm[0][0]
+    r12 = tfm[0][1]
+    r13 = tfm[0][2]
+    r21 = tfm[1][0]
+    r22 = tfm[1][1]
+    r23 = tfm[1][2]
+    r31 = tfm[2][0]
+    r32 = tfm[2][1]
+    r33 = tfm[2][2]
+
+    q0 = (r11+r22+r33+1.0)/4.0
+    q1 = (r11-r22-r33+1.0)/4.0
+    q2 = (-r11+r22-r33+1.0)/4.0
+    q3 = (-r11-r22+r33+1.0)/4.0
+
+    if q0<0:q0=0
+    if q1<0:q1=0
+    if q2<0:q2=0
+    if q3<0:q3=0
+
+    q0=np.sqrt(q0)
+    q1=np.sqrt(q1)
+    q2=np.sqrt(q2)
+    q3=np.sqrt(q3)
+
+    if(q0>q1) and (q0>q2) and (q0>q3):
+        q0 *= +1.0
+        q1 *= np.sign(r32 - r23)
+        q2 *= np.sign(r13 - r31)
+        q3 *= np.sign(r21 - r12)
+    elif(q1 >= q0) and (q1 >= q2) and (q1 >= q3):
+        q0 *= np.sign(r32 - r23)
+        q1 *= +1.0
+        q2 *= np.sign(r21 + r12)
+        q3 *= np.sign(r13 + r31)
+    elif(q2 >= q0) and (q2 >= q1) and (q2 >= q3):
+        q0 *= np.sign(r13 - r31)
+        q1 *= np.sign(r21 + r12)
+        q2 *= +1.0
+        q3 *= np.sign(r32 + r23)
+    elif(q3 >= q0) and (q3 >= q1) and (q3 >= q2):
+        q0 *= np.sign(r21 - r12)
+        q1 *= np.sign(r31 + r13)
+        q2 *= np.sign(r32 + r23)
+        q3 *= +1.0
+    else:
+        print("coding error\n")
+    
+    a = np.array([q0, q1, q2, q3])
+    r = np.linalg.norm(a)
+    q0 /= r
+    q1 /= r
+    q2 /= r
+    q3 /= r
+
+    return np.array([q0, q1, q2, q3])
+    
+def quat_to_bmesh_rot(q):
+    w=q[0]
+    x=q[1]
+    y=q[2]
+    z=q[3]
+
+    r11=1-2*y**2-2*z**2
+    r12=2*x*y+2*w*z
+    r13=2*x*z-2*w*y
+    r21=2*x*y-2*w*z
+    r22=1-2*x**2-2*z**2
+    r23=2*y*z+2*w*x
+    r31=2*x*z+2*w*y
+    r32=2*y*z-2*w*x
+    r33=1-2*x**2-2*y**2
+
+    #I do not know why blender matrix 4x4 needs to swap row a columns for rotation matrix, but it works.
+    rot = mathutils.Matrix.Identity(4)
+    rot[0][0] = r11
+    rot[0][1] = r21
+    rot[0][2] = r31
+    rot[0][3] = 0
+    rot[1][0] = r12
+    rot[1][1] = r22
+    rot[1][2] = r32
+    rot[1][3] = 0
+    rot[2][0] = r13
+    rot[2][1] = r23
+    rot[2][2] = r33
+    rot[2][3] = 0
+    rot[3][0] = 0
+    rot[3][1] = 0
+    rot[3][2] = 0
+    rot[3][3] = 1
+
+    return rot
+
+def quat_ip(q1,q2,t):
+    theta = math.acos(np.dot(q1,q2))
+    if theta != 0:        
+        k1 = math.sin((1-t)*theta)/math.sin(theta)
+        k2 = math.sin(t*theta)/math.sin(theta)
+        return (k1*q1)+(k2*q2)
+    else:
+        return q1
+
+def tfm_ip(tfm1,tfm2,t):
+    q1 = tfm_to_quat(tfm1)
+    q2 = tfm_to_quat(tfm2)
+    q = quat_ip(q1,q2,t)
+    tfm_ip = quat_to_bmesh_rot(q)
+
+    x = tfm1[0][3] + t*(tfm2[0][3] - tfm1[0][3])
+    y = tfm1[1][3] + t*(tfm2[1][3] - tfm1[1][3])
+    z = tfm1[2][3] + t*(tfm2[2][3] - tfm1[2][3])
+    tfm_ip[0][3] = x
+    tfm_ip[1][3] = y
+    tfm_ip[2][3] = z
+
+    return tfm_ip
+
 
 #######################################################################
 #Interface functions between blender and open3d
@@ -68,6 +193,26 @@ def bmesh_to_pcd(arg_objectname="Default") -> bool:
     
     return pcd, np_tfm
 
+def np_tfm_2_matrix4x4_tfm(np_tfm):
+    matrix4x4_tfm = mathutils.Matrix.Identity(4)
+    for i in range(4):
+        for j in range(4):
+            matrix4x4_tfm[i][j] = np_tfm[i][j]
+    print(np_tfm)
+    print(matrix4x4_tfm)
+    return matrix4x4_tfm
+
+def transform_anime(obj,end_tfm,anime_time,fps):
+    wait_time = (1/fps)
+    f_num = int(anime_time * fps)
+
+    ini_tfm = copy.copy(obj.matrix_world)
+    for f in range(f_num):
+        tfm_temp = tfm_ip(ini_tfm,end_tfm,(f+1)/f_num)
+        obj.matrix_world = tfm_temp
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        time.sleep(wait_time)
+
 def transform_bmesh(arg_objectname, np_tfm):
     bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
     selectob = bpy.data.objects.get(arg_objectname)
@@ -79,7 +224,13 @@ def transform_bmesh(arg_objectname, np_tfm):
 
     bpy.context.view_layer.objects.active = selectob
     bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
-    selectob.matrix_world = np_tfm.T   
+    matrix4x4_tfm = np_tfm_2_matrix4x4_tfm(np_tfm)
+    print('AAAAAAAAAAAAAAAAAAAAA')
+    print(np_tfm.T)
+    print(matrix4x4_tfm)
+    print('AAAAAAAAAAAAAAAAAAAAA')
+    transform_anime(selectob,matrix4x4_tfm,1,10)
+    #selectob.matrix_world = matrix4x4_tfm
     
 ###########################################################################
 #Open3d functions
@@ -866,7 +1017,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Shota Kotake",
-    "version": (1, 32),
+    "version": (1, 33),
     "blender": (3, 0, 1),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
