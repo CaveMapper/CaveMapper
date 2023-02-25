@@ -3,7 +3,7 @@ CaveMapperは、LiDAR搭載i-Phoneにより3Dスキャンした洞窟の3Dデー
 
 CaveMapperには以下の機能が含まれる。
 
-・分割スキャンした3Dデータの結合
+・分割スキャンした3Dデータ結合の補助
 
 ・データの軽量化
 
@@ -14,4 +14,4 @@ CaveMapperには以下の機能が含まれる。
 <a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" >**こちら**</a>を参照すること。
 
 <a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" >**Documentation**</a>
- for cavemapper that shows how to install and how to use is only in Japanese. If you have interest, please try to use google translation.
+ for CaveMapper that shows how to install and how to use is only in Japanese. If you have interest, please try to use google translation.
