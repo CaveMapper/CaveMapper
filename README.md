@@ -15,3 +15,5 @@ CaveMapperには以下の機能が含まれる。
 
 <a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" >**Documentation**</a>
  for CaveMapper that shows how to install and how to use is only in Japanese. If you have interest, please try to use google translation.
+
+・てすと
