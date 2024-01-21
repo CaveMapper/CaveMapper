@@ -1,19 +1,16 @@
 ## 概要
-CaveMapperは、LiDAR搭載i-Phoneにより3Dスキャンした洞窟の3Dデータを扱うためのプログラムである。このプログラムは、フリー3DCGソフトであるBlender上で動作するアドオンである、使用にあたってはBlenderの基本的な使い方を習得している必要がある。
+CaveMapperは、LiDAR搭載iPhoneにより3Dスキャンした洞窟の3Dデータを扱うためのプログラムである。このプログラムは、フリー3DCGソフトであるBlender上で動作するアドオンである、使用にあたってはBlenderの基本的な使い方を習得している必要がある。
 
-CaveMapperには以下の機能が含まれる。
 
-・分割スキャンした3Dデータ結合の補助
+## 洞窟3Dスキャンに関する知見
+CaveMapperの使用方法を含む、洞窟3Dスキャンに関する知見を以下に記す。
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/CaveMapper Manual" >**CaveMapperマニュアル**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
 
-・データの軽量化
+## 3Dスキャンデータの例
+- <a href = "https://cavemapper.github.io/CaveViewer/" >**3Dスキャンデータの例**</a>
 
-・断面図作成
 
-## インストール方法及び使用方法
-インストール方法及び使用方法は
-<a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" >**こちら**</a>を参照すること。
-
-<a href = "https://github.com/CaveMapper/CaveMapper/wiki/wiki_JP" >**Documentation**</a>
- for CaveMapper that shows how to install and how to use is only in Japanese. If you have interest, please try to use google translation.
-
-・てすと
+ Note:  
+ Sorry, all above documents are written by only Japanese. If you have interest, please try to use some translation service.
