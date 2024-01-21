@@ -2,14 +2,14 @@
 CaveMapperは、LiDAR搭載iPhoneにより3Dスキャンした洞窟の3Dデータを扱うためのプログラムである。このプログラムは、フリー3DCGソフトであるBlender上で動作するアドオンである、使用にあたってはBlenderの基本的な使い方を習得している必要がある。
 
 
-## 洞窟3Dスキャンに関する知見
-CaveMapperの使用方法を含む、洞窟3Dスキャンに関する知見を以下に記す。
-- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
-- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/CaveMapper Manual" >**CaveMapperマニュアル**</a>  
-- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
+## マニュアル
+CaveMapperのマニュアルを以下に記す。CaveMapperの利用にあたっては、先に次項の**洞窟3Dスキャン入門**を参照されたい。
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/02_CaveMapper Manual" >**CaveMapperマニュアル**</a>  
 
-## 3Dスキャンデータの例
-- <a href = "https://cavemapper.github.io/CaveViewer/" >**3Dスキャンデータの例**</a>
+## 3Dスキャンに関する知見
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/01_Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/03_Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/04_Cave_Library" >**3Dスキャンデータの例**</a>
 
 
  Note:  
