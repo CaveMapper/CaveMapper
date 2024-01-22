@@ -4,7 +4,7 @@ CaveMapperは、LiDAR搭載iPhoneにより3Dスキャンした洞窟の3Dデー�
 
 ## マニュアル
 CaveMapperのマニュアルを以下に記す。CaveMapperの利用にあたっては、先に次項の**洞窟3Dスキャン入門**を参照されたい。
-- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/02_CaveMapper Manual" >**CaveMapperマニュアル**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/02_CaveMapper_Manual" >**CaveMapperマニュアル**</a>  
 
 ## 3Dスキャンに関する知見
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/01_Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
