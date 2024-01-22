@@ -9,7 +9,7 @@ CaveMapperのマニュアルを以下に記す。CaveMapperの利用にあたっ
 ## 3Dスキャンに関する知見
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/01_Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/03_Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
-- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/04_Cave_Library" >**3Dスキャンデータの例**</a>
+- <a href = "https://cavemapper.github.io/CaveViewer/" >**3Dスキャンデータの例**</a>
 
 
  Note:  
