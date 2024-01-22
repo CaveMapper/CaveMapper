@@ -16,9 +16,9 @@ from bpy.props import (
     BoolProperty,
     StringProperty
 )
+import open3d as o3d
 import bmesh
 import numpy as np
-import open3d as o3d
 import copy
 import time
 import math
@@ -27,6 +27,27 @@ import os
 import mathutils
 from mathutils import Color
 from mathutils import Vector
+from mathutils import Matrix
+import pkg_resources
+import subprocess
+import sys
+import textwrap
+
+global ini_verts
+global end_verts
+global len_to_center
+global max_len_to_center_selection
+global source_obj
+global selected_verts_id
+global canAdjustEffect
+
+ini_verts = []
+end_verts = []
+len_to_center = []
+max_len_to_center_selection = 0.0
+source_obj = None
+selected_verts_id = []
+canAdjustEffect = False
 
 #color_convertor
 def setObjColor(i):
@@ -166,7 +187,6 @@ def select_objs(selection_obj_name_list,active_obj_name):
     bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
     for obj in bpy.context.scene.objects:
         obj.select_set(False)
-        print(obj)
     for obj_name in selection_obj_name_list:
         obj = bpy.data.objects.get(obj_name)
         obj.select_set(True)
@@ -175,8 +195,27 @@ def select_objs(selection_obj_name_list,active_obj_name):
         active_obj = bpy.data.objects.get(active_obj_name)
         active_obj.select_set(True)
         bpy.context.view_layer.objects.active = active_obj
+        
+def select_verts(source_obj,selected_verts_id):
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+    for obj in bpy.context.scene.objects:
+        obj.select_set(False)
+    source_obj.select_set(True)
+    bpy.context.view_layer.objects.active = source_obj
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+    
+    mesh = source_obj.data
+    bm = bmesh.from_edit_mesh(mesh)
+    for v in bm.verts:
+        if v.index in [v_id for v_id in selected_verts_id]:
+            v.select = True
+        else:
+            v.select = False
 
-def bmesh_to_pcd(arg_objectname="Default") -> bool:
+    bmesh.update_edit_mesh(mesh)
+    
+
+def bmesh_to_pcd(arg_objectname, vert_select):
     selectob = bpy.data.objects.get(arg_objectname)
     if selectob == None:
         return False
@@ -184,20 +223,27 @@ def bmesh_to_pcd(arg_objectname="Default") -> bool:
         ob.select_set(False)
     selectob.select_set(True)
 
-    bpy.context.view_layer.objects.active = selectob
-    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+    if vert_select == False:
+        bpy.context.view_layer.objects.active = selectob
+        bpy.ops.object.mode_set(mode='EDIT', toggle=False)    
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        
     meshdata = bmesh.from_edit_mesh(selectob.data)
     meshdata.select_mode = {'VERT'}
     
     np_tfm = np.array(selectob.matrix_world)
-    np_points = np.ones((len(meshdata.verts),3))
+    np_points = np.ones((len([v for v in meshdata.verts if v.select]),3))
+    np_normals = np.ones((len([v for v in meshdata.verts if v.select]),3))
     
     meshdata.verts.ensure_lookup_table()
-    for i in range (len(meshdata.verts)):
-        np_points[i] = meshdata.verts[i].co        
+    for i, v in enumerate([v for v in meshdata.verts if v.select]):
+        np_points[i] = v.co
+        np_normals[i] = v.normal
         
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(np_points)
+    pcd.normals = o3d.utility.Vector3dVector(np_normals)
     
     return pcd, np_tfm
 
@@ -233,10 +279,7 @@ def transform_bmesh(arg_objectname, np_tfm):
     bpy.context.view_layer.objects.active = selectob
     bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
     matrix4x4_tfm = np_tfm_2_matrix4x4_tfm(np_tfm)
-    print('AAAAAAAAAAAAAAAAAAAAA')
-    print(np_tfm.T)
-    print(matrix4x4_tfm)
-    print('AAAAAAAAAAAAAAAAAAAAA')
+
     transform_anime(selectob,matrix4x4_tfm,1,10)
     #selectob.matrix_world = matrix4x4_tfm
     
@@ -244,14 +287,9 @@ def transform_bmesh(arg_objectname, np_tfm):
 #Open3d functions
 ###########################################################################
 
-def preprocess_point_cloud(pcd, voxel_size, normal_coef, FPFH_coef):
+def preprocess_point_cloud(pcd, voxel_size, FPFH_coef):
     print(":: Downsample with a voxel size %.3f." % voxel_size)
     pcd_down = pcd.voxel_down_sample(voxel_size)
-
-    radius_normal = voxel_size * normal_coef
-    print(":: Estimate normal with search radius %.3f." % radius_normal)
-    pcd_down.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
 
     radius_feature = voxel_size * FPFH_coef
     print(":: Compute FPFH feature with search radius %.3f." % radius_feature)
@@ -262,19 +300,14 @@ def preprocess_point_cloud(pcd, voxel_size, normal_coef, FPFH_coef):
     return pcd_down, pcd_fpfh
 
 
-def downsize_point_cloud_with_normal(pcd, voxel_size, normal_coef):
+def downsize_point_cloud_with_normal(pcd, voxel_size):
     print(":: Downsample with a voxel size %.3f." % voxel_size)
     pcd_down = pcd.voxel_down_sample(voxel_size)
-
-    radius_normal = voxel_size * normal_coef
-    print(":: Estimate normal with search radius %.3f." % radius_normal)
-    pcd_down.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
     
     return pcd_down
     
 
-def prepare_dataset(voxel_size, Aligment_normal_coef, Aligment_FPFH_coef,source,source_tfm, target,target_tfm):
+def prepare_dataset(voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm):
     print(":: Load two point clouds and disturb initial pose.")
     
     source.transform(source_tfm)
@@ -282,8 +315,8 @@ def prepare_dataset(voxel_size, Aligment_normal_coef, Aligment_FPFH_coef,source,
     
     #draw_registration_result(source, target, np.identity(4))
 
-    source_down, source_fpfh = preprocess_point_cloud(source, voxel_size, Aligment_normal_coef, Aligment_FPFH_coef)
-    target_down, target_fpfh = preprocess_point_cloud(target, voxel_size, Aligment_normal_coef, Aligment_FPFH_coef)
+    source_down, source_fpfh = preprocess_point_cloud(source, voxel_size, Aligment_FPFH_coef)
+    target_down, target_fpfh = preprocess_point_cloud(target, voxel_size, Aligment_FPFH_coef)
     return source, target, source_down, target_down, source_fpfh, target_fpfh
 
 
@@ -335,12 +368,12 @@ def refine_registration(source, target, source_fpfh, target_fpfh, voxel_size,ICP
 ################################################################################
 #Process Functions
 ################################################################################
-def Process_GR(source_name,target_name,voxel_size,GR_coef, Aligment_normal_coef, Aligment_FPFH_coef):
-    source,source_tfm = bmesh_to_pcd(source_name)
-    target,target_tfm = bmesh_to_pcd(target_name)
+def Process_GR(source_name,target_name,voxel_size,GR_coef, Aligment_FPFH_coef):
+    source,source_tfm = bmesh_to_pcd(source_name,False)
+    target,target_tfm = bmesh_to_pcd(target_name,False)
 
     source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(
-        voxel_size, Aligment_normal_coef, Aligment_FPFH_coef, source,source_tfm, target,target_tfm)
+        voxel_size, Aligment_FPFH_coef, source,source_tfm, target,target_tfm)
     result_ransac = execute_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size,GR_coef)
     #result_ransac = execute_fast_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size,GR_coef)
     
@@ -348,54 +381,124 @@ def Process_GR(source_name,target_name,voxel_size,GR_coef, Aligment_normal_coef,
     
     select_objs([target_name],source_name)
 
-def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_normal_coef, Aligment_FPFH_coef):
-    source,source_tfm = bmesh_to_pcd(source_name)
-    target,target_tfm = bmesh_to_pcd(target_name)
+def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
+    source,source_tfm = bmesh_to_pcd(source_name,False)
+    target,target_tfm = bmesh_to_pcd(target_name,False)
 
     source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(
-        voxel_size, Aligment_normal_coef, Aligment_FPFH_coef,source,source_tfm, target,target_tfm)
+        voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm)
     result_icp = refine_registration(source_down, target_down, source_fpfh, target_fpfh,
                                      voxel_size,ICP_coef)
 
-    print(result_icp.transformation)
+    #print(result_icp.transformation)
     transform_bmesh(source_name,result_icp.transformation @ source_tfm)
     
     select_objs([target_name],source_name)
 
+def Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
+    global ini_verts
+    global end_verts
+    global len_to_center
+    global max_len_to_center_selection
+    global source_obj
+    global selected_verts_id
+    global canAdjustEffect
+    
+    ini_verts = []
+    end_verts = []
+    len_to_center = []
+    
+    obj = bpy.data.objects.get(source_name)
+    mesh = obj.data
+    bm = bmesh.from_edit_mesh(mesh)
+    source_obj = obj
+    
+    ini_verts = [v.co.copy() for v in bm.verts]
+    selected_verts = [v for v in bm.verts if v.select]
+    selected_verts_id = [v.index for v in bm.verts if v.select]
+    
+    center = Vector()
+    for v in selected_verts:
+        center += v.co
+    center /= len(selected_verts)    
+    len_to_center = [(co - center).length for co in ini_verts]
+    len_to_center_selection = [(v.co - center).length for v in selected_verts]
+    max_len_to_center_selection = max(len_to_center_selection)
+    
+    source,source_tfm = bmesh_to_pcd(source_name,True)
+    target,target_tfm = bmesh_to_pcd(target_name,False)
+
+    source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(
+        voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm)
+    result_icp = refine_registration(source_down, target_down, source_fpfh, target_fpfh,
+                                     voxel_size,ICP_coef)
+                                    
+    matrix4x4_tfm = np_tfm_2_matrix4x4_tfm(np.linalg.inv(source_tfm) @ result_icp.transformation @ source_tfm)
+    
+    end_verts = [(matrix4x4_tfm @ co) for co in ini_verts]
+    
+    select_verts(source_obj,selected_verts_id)
+    
+    canAdjustEffect = True
+    bm.free()
+
+def Process_apply_propotional_edit():
+    global ini_verts
+    global end_verts
+    global len_to_center
+    global max_len_to_center_selection
+    global source_obj
+    global selected_verts_id
+    global canAdjustEffect
+    
+    
+    select_verts(source_obj,selected_verts_id)
+
+    el = bpy.context.scene.effective_length
+    
+    effected_verts_id = []
+    
+    mesh = source_obj.data
+    bm = bmesh.from_edit_mesh(mesh) 
+    
+    for i, v in enumerate(bm.verts):
+        if el < len_to_center[i]:
+            c = 0.0
+        else:
+            if max_len_to_center_selection > len_to_center[i]:
+                c = 1.0
+            else:
+                c = (el -len_to_center[i]) / (el - max_len_to_center_selection)
+            effected_verts_id.append(v.index)
+ 
+        v.co = ini_verts[i] + (end_verts[i] - ini_verts[i]) * c
+    
+    select_verts(source_obj,effected_verts_id)
+    bmesh.update_edit_mesh(mesh)
+    bm.free()
+
 #Remesh function has Canceld 
-def Process_remesh(mesh_list,voxel_size, Remesh_normal_coef):
+def Process_remesh(mesh_list,voxel_size):
     pcd_list= []
     for m in mesh_list:
-        pcd, pcd_tfm = bmesh_to_pcd(m.name)
+        pcd, pcd_tfm = bmesh_to_pcd(m.name,False)
         pcd.transform(pcd_tfm)
         pcd_list.append(pcd)
     print(pcd_list)
     
     all_points = []
+    all_normals = []
     for pcd in pcd_list:
         all_points.append(np.asarray(pcd.points))
+        all_normals.append(np.asarray(pcd.normals))
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(np.vstack(all_points))
-    pcd_down  = downsize_point_cloud_with_normal(pcd, voxel_size, Remesh_normal_coef)    
+    pcd.normals = o3d.utility.Vector3dVector(np.vstack(all_normals))
     
-    #coef_list = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-    #coef_list = [0.3, 0.4, 0.5, 0.6, 0.7]
-    coef_list = [i / 100 for i in range(10, 200, 5)]
-    radii =[x*voxel_size for x in coef_list]
-    print(radii)
-    o3d_triangle_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd_down,o3d.utility.DoubleVector(radii))
-    
-    
-    '''
-    with o3d.utility.VerbosityContextManager(
-            o3d.utility.VerbosityLevel.Debug) as cm:
-        o3d_triangle_mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            pcd_down, depth=9)
-    
-    vertices_to_remove = densities < np.quantile(densities, 0.04)
-    o3d_triangle_mesh.remove_vertices_by_mask(vertices_to_remove)
-    '''
+    pcd_down  = downsize_point_cloud_with_normal(pcd, voxel_size)  
+            
+    o3d_triangle_mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd_down, depth=9)
     
     return(o3d_triangle_mesh)        
 
@@ -1025,12 +1128,12 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Shota Kotake",
-    "version": (1, 34),
-    "blender": (3, 0, 1),
+    "version": (2, 1),
+    "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
     "warning": "",
-    "support": "TESTING",
+    "support": "COMMUNITY",
     "doc_url": "",
     "tracker_url": "",
     "category": "User Interface"
@@ -1111,9 +1214,8 @@ class Run_GR(bpy.types.Operator):
         scene = bpy.context.scene
         voxel_size = scene.Aligment_voxel_size
         GR_coef = scene.GR_coef
-        Aligment_normal_coef = scene.Aligment_normal_coef
         Aligment_FPFH_coef = scene.Aligment_FPFH_coef
-        Process_GR(source_name,target_name,voxel_size,GR_coef, Aligment_normal_coef, Aligment_FPFH_coef)
+        Process_GR(source_name,target_name,voxel_size,GR_coef, Aligment_FPFH_coef)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
@@ -1145,13 +1247,92 @@ class Run_ICP(bpy.types.Operator):
         scene = bpy.context.scene
         voxel_size = scene.Aligment_voxel_size
         ICP_coef = scene.ICP_coef
-        Aligment_normal_coef = scene.Aligment_normal_coef
         Aligment_FPFH_coef = scene.Aligment_FPFH_coef
-        Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_normal_coef, Aligment_FPFH_coef)
+        Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
 
+class Run_Set_Target(bpy.types.Operator):
+    bl_idname = "object.run_set_target"
+    bl_label = "NOP"
+    bl_description = "Regist aligned position"
+    bl_options = {'REGISTER', 'UNDO'}
+    target_obj = None
+    
+    @classmethod
+    def poll(cls, context):
+        if len(bpy.context.selected_objects) == 1:
+            if bpy.context.active_object != None:
+                return True
+        return False
+
+    def execute(self, context):    
+        scene = bpy.context.scene
+        
+        scene.target_obj_name = bpy.context.active_object.name
+                
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+    
+class Run_Partial_ICP(bpy.types.Operator):
+    bl_idname = "object.run_partial_icp"
+    bl_label = "NOP"
+    bl_description = "relux coarse mesh"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        scene = bpy.context.scene
+        if len(bpy.context.selected_objects) == 1:
+            if bpy.context.mode == 'EDIT_MESH':
+                if bpy.context.tool_settings.mesh_select_mode[0]:
+                    return True
+                    '''
+                    #Not work
+                    if scene.target_obj_name != bpy.context.selected_objects[0].name:
+                        for obj in bpy.context.scene.objects:                        
+                            if obj.name == scene.target_obj:
+                    '''
+                        
+        return False
+
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+        
+        scene = bpy.context.scene
+
+        source_name = bpy.context.selected_objects[0].name
+        target_name = scene.target_obj_name
+        voxel_size = scene.Aligment_voxel_size
+        ICP_coef = scene.ICP_coef
+        Aligment_FPFH_coef = scene.Aligment_FPFH_coef
+        
+        Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
+        
+        #print(scene.target_obj_name)
+        #print(bpy.context.selected_objects[0].name)
+                
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+
+class Run_Apply_propotional_edit(bpy.types.Operator):
+    bl_idname = "object.run_apply_prpotional_edit"
+    bl_label = "NOP"
+    bl_description = "relux coarse mesh"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        return canAdjustEffect
+
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+
+        Process_apply_propotional_edit()
+        
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
 
 class Run_Decimate(bpy.types.Operator):
     bl_idname = "object.run_decimate"
@@ -1199,7 +1380,7 @@ class Run_Remesh(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
-        if len(bpy.context.selected_objects) > 1:
+        if len(bpy.context.selected_objects) > 0:
                 return True
         return False
 
@@ -1208,10 +1389,9 @@ class Run_Remesh(bpy.types.Operator):
         
         scene = bpy.context.scene
         voxel_size = scene.Remesh_voxel_size
-        Remesh_normal_coef = scene.Remesh_normal_coef
         
         mesh_name = "UnionMesh"
-        o3d_triangle_mesh = Process_remesh(bpy.context.selected_objects,voxel_size, Remesh_normal_coef)
+        o3d_triangle_mesh = Process_remesh(bpy.context.selected_objects,voxel_size)
         make_blenderBmesh_from_open3dTriangleMesh(o3d_triangle_mesh,mesh_name)
                 
         bpy.context.window.cursor_set("DEFAULT")
@@ -1298,7 +1478,7 @@ class IMPORT_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
@@ -1307,7 +1487,7 @@ class IMPORT_PT_CustomPanel(bpy.types.Panel):
     # メニューの描画処理
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
+        scene = context.scene     
         
         layout.use_property_split = True
         layout.use_property_decorate = False  # No animation.
@@ -1321,7 +1501,7 @@ class ALIGHMENT_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
@@ -1337,7 +1517,7 @@ class CONFIG_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     bl_parent_id = "ALIGHMENT_PT_CustomPanel"
     bl_options = {'DEFAULT_CLOSED'}
 
@@ -1354,11 +1534,10 @@ class CONFIG_PT_CustomPanel(bpy.types.Panel):
         layout.use_property_decorate = False  # No animation.
 
         #Parameters
-        layout.prop(scene, "Aligment_voxel_size", text="Ref Length")
-        layout.prop(scene, "Aligment_normal_coef", text="Normal Coef")
+        layout.prop(scene, "Aligment_voxel_size", text="Voxcel Size")
         layout.prop(scene, "Aligment_FPFH_coef", text="FPFH Coef")
         layout.prop(scene, "GR_coef", text="Rough Coef")
-        layout.prop(scene, "ICP_coef", text="Refine Coef")
+        layout.prop(scene, "ICP_coef", text="Fine Coef")
         
 
 class PROCESS_PT_CustomPanel(bpy.types.Panel):
@@ -1366,7 +1545,7 @@ class PROCESS_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     bl_parent_id = "ALIGHMENT_PT_CustomPanel"
 
     # ヘッダーのカスタマイズ
@@ -1383,15 +1562,42 @@ class PROCESS_PT_CustomPanel(bpy.types.Panel):
 
         #Run Buttom
         layout.operator(Run_GR.bl_idname, text="Rough Aligment" , icon = 'SORTTIME')
-        layout.operator(Run_ICP.bl_idname, text="Refine Aligment", icon = 'SORTTIME')
+        layout.operator(Run_ICP.bl_idname, text="Fine Aligment", icon = 'SORTTIME')
 
+class PARTIAL_PROCESS_PT_CustomPanel(bpy.types.Panel):
+    bl_label = "Partial Alignment"         # パネルのヘッダに表示される文字列
+    bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
+    bl_region_type = 'UI'               # パネルを登録するリージョン
+    bl_category = "Cave Mapper"         # パネルを登録するタブ名
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
+    bl_parent_id = "ALIGHMENT_PT_CustomPanel"
+
+    # ヘッダーのカスタマイズ
+    def draw_header(self, context):
+        layout = self.layout
+
+    # メニューの描画処理
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        
+        layout.use_property_split = True
+        layout.use_property_decorate = False  # No animation.
+
+        #Run Buttom
+        layout.operator(Run_Set_Target.bl_idname, text="Set Target")
+        layout.label(text="Target: " + scene.target_obj_name)
+        layout.operator(Run_Partial_ICP.bl_idname, text="Partial Aligment", icon = 'SORTTIME')
+        layout.label(text="Propotional Edit")
+        layout.prop(scene,"effective_length", text="Eff Length")
+        layout.operator(Run_Apply_propotional_edit.bl_idname, text="Apply Deform")
 
 class DECIMATE_PT_CustomPanel(bpy.types.Panel):
     bl_label = "Down sizing"         # パネルのヘッダに表示される文字列
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     bl_options = {'DEFAULT_CLOSED'}
     
     # ヘッダーのカスタマイズ
@@ -1417,7 +1623,7 @@ class REMESH_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
@@ -1430,10 +1636,8 @@ class REMESH_PT_CustomPanel(bpy.types.Panel):
         
         layout.use_property_split = True
         layout.use_property_decorate = False  # No animation.
-
-        #ICP
-        layout.prop(scene, "Remesh_voxel_size", text="Ref Length")
-        layout.prop(scene, "Remesh_normal_coef", text="Normal Coef")
+        
+        layout.prop(scene, "Remesh_voxel_size", text="Voxcel Size")
         layout.operator(Run_Remesh.bl_idname, text="Union")
 
 class CROSS_SECTION_PT_CustomPanel(bpy.types.Panel):
@@ -1441,7 +1645,7 @@ class CROSS_SECTION_PT_CustomPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
-    bl_context = "objectmode"           # パネルを表示するコンテキスト
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
     
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
@@ -1487,12 +1691,6 @@ def init_props():
         default=5,
         min=0.0,
     )
-    scene.Aligment_normal_coef = FloatProperty(
-        name="Aligment_normal_coef",
-        description="The value obtained by multiplying the voxel size by this coefficient is the radius for normal estimation of downsampled point cloud model.",
-        default=4,
-        min=0.0,
-    )
     scene.Aligment_FPFH_coef = FloatProperty(
         name="Aligment_FPFH_coef",
         description="The value obtained by multiplying the voxel size by this coefficient is the radius for FPFH of downsampled point cloud model..",
@@ -1505,6 +1703,18 @@ def init_props():
         default=2,
         min=0.0,
     )
+    scene.target_obj_name = StringProperty(
+        name="target_obj_name",
+        description="Target object name for partial alignment",
+        default = "None",
+    )
+    scene.effective_length = FloatProperty(
+        name="effective_length",
+        description="effective_length for partial alignment",
+        default=1.0,
+        min=0.0,
+        subtype = 'DISTANCE'
+    ) 
     scene.decimate_ref_length = FloatProperty(
         name="decimate_ref_length",
         description="Estimate edges length of down sized mesh",
@@ -1525,12 +1735,6 @@ def init_props():
         default=0.2,
         min=0.0,
         subtype = 'DISTANCE'
-    )
-    scene.Remesh_normal_coef = FloatProperty(
-        name="Remesh_normal_coef",
-        description="The value obtained by multiplying the voxel size by this coefficient is the radius for normal estimation of downsampled point cloud model.",
-        default=4,
-        min=0.0,
     )
     scene.image_size = IntProperty(
         name="Image_size",
@@ -1568,13 +1772,13 @@ def clear_props():
     del scene.folder_path
     del scene.Aligment_voxel_size
     del scene.GR_coef
-    del scene.Aligment_normal_coef
     del scene.Aligment_FPFH_coef
     del scene.ICP_coef
+    del scene.target_obj_name
+    del scene.effective_length
     del scene.decimate_ref_length
     del scene.image_reduction_ratio
     del scene.Remesh_voxel_size
-    del scene.Remesh_normal_coef
     del scene.image_size
     del scene.scale_length
     del scene.cs_obj_name
@@ -1584,19 +1788,24 @@ classes = [
     import_models,
     Run_GR,
     Run_ICP,
+    Run_Set_Target,
+    Run_Partial_ICP,
+    Run_Apply_propotional_edit,
     Run_Decimate,
     Run_Texture_reduction,
-    #Run_Remesh,
+    Run_Remesh,
     Run_cs_model_pre_prs,
     Run_cs_bake_and_composite,
     IMPORT_PT_CustomPanel,
     ALIGHMENT_PT_CustomPanel,
     CONFIG_PT_CustomPanel,
     PROCESS_PT_CustomPanel,
+    PARTIAL_PROCESS_PT_CustomPanel,
     DECIMATE_PT_CustomPanel,
-    #REMESH_PT_CustomPanel
+    REMESH_PT_CustomPanel,
     CROSS_SECTION_PT_CustomPanel
 ]
+
 
 
 def register():

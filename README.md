@@ -11,6 +11,8 @@ CaveMapperのマニュアルを以下に記す。CaveMapperの利用にあたっ
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/03_Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
 - <a href = "https://cavemapper.github.io/CaveViewer/" >**3Dスキャンデータの例**</a>
 
+## 更新履歴
+更新履歴は<a href = "https://github.com/CaveMapper/CaveMapper/wiki/05_Revision_History" >**こちら**</a>を参照  
 
  Note:  
- Sorry, all above documents are written by only Japanese. If you have interest, please try to use some translation service.
+ Sorry, all above documents are written by Japanese only. If you have interest, please try to use some translation service.
