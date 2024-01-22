@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 '''
-Copyright <2022> <CaveMapper>
+Copyright <2024> <CaveMapper>
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -282,6 +282,22 @@ def transform_bmesh(arg_objectname, np_tfm):
 
     transform_anime(selectob,matrix4x4_tfm,1,10)
     #selectob.matrix_world = matrix4x4_tfm
+
+def make_blenderBmesh_from_open3dTriangleMesh(o3d_triangle_mesh,mesh_name):
+    verts = o3d_triangle_mesh.vertices
+    faces = o3d_triangle_mesh.triangles
+    
+    msh = bpy.data.meshes.new(mesh_name) #Meshデータの宣言
+    msh.from_pydata(verts, [], faces) # 頂点座標と各面の頂点の情報でメッシュを作成
+    obj = bpy.data.objects.new(mesh_name, msh) # メッシュデータでオブジェクトを作成
+    bpy.context.scene.collection.objects.link(obj) # シーンにオブジェクトを配置
+    
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)
+    obj.select_set(True)
+    
+    return obj
     
 ###########################################################################
 #Open3d functions
@@ -477,7 +493,6 @@ def Process_apply_propotional_edit():
     bmesh.update_edit_mesh(mesh)
     bm.free()
 
-#Remesh function has Canceld 
 def Process_remesh(mesh_list,voxel_size):
     pcd_list= []
     for m in mesh_list:
@@ -502,24 +517,8 @@ def Process_remesh(mesh_list,voxel_size):
     
     return(o3d_triangle_mesh)        
 
-def make_blenderBmesh_from_open3dTriangleMesh(o3d_triangle_mesh,mesh_name):
-    verts = o3d_triangle_mesh.vertices
-    faces = o3d_triangle_mesh.triangles
-    
-    msh = bpy.data.meshes.new(mesh_name) #Meshデータの宣言
-    msh.from_pydata(verts, [], faces) # 頂点座標と各面の頂点の情報でメッシュを作成
-    obj = bpy.data.objects.new(mesh_name, msh) # メッシュデータでオブジェクトを作成
-    bpy.context.scene.collection.objects.link(obj) # シーンにオブジェクトを配置
-    
-    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
-    selectob = bpy.data.objects.get(mesh_name)
-    for ob in bpy.context.scene.objects:
-        ob.select_set(False)
-    selectob.select_set(True)
 
-################################################################################
-#Blender functions
-################################################################################
+
 def Process_decimate(mesh_list,decimate_ref_length):
     trs = bpy.app.translations.pgettext
     if bpy.context.active_object == None:
@@ -563,8 +562,7 @@ def Process_decimate(mesh_list,decimate_ref_length):
 
     
     mesh_name_list = [m.name for m in mesh_list]
-    select_objs(mesh_name_list,active_obj_name)
-    
+    select_objs(mesh_name_list,active_obj_name)    
 
 def Process_texture_reduction(image_reduction_ratio):
     for image in bpy.data.images:
@@ -574,6 +572,45 @@ def Process_texture_reduction(image_reduction_ratio):
             x = int(image.size[0] / float(image_reduction_ratio))
             y = int(image.size[1] / float(image_reduction_ratio))
             image.scale(x,y)
+
+################################################################################
+#Blender functions
+################################################################################
+
+def delete_small_poly_islands(obj):
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)
+    obj.select_set(True)
+    
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+    mesh = obj.data
+    bm = bmesh.from_edit_mesh(mesh)
+    
+    for vert in bm.verts:
+        i = vert.index
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.mesh.select_linked_pick(deselect=False, delimit=set(), object_index=0, index=i)
+        selected_verts_num = len([v for v in bm.verts if v.select])
+            
+        if selected_verts_num > (len(bm.verts) - selected_verts_num):
+            break
+    
+    bpy.ops.mesh.select_all(action='INVERT')
+    bpy.ops.mesh.delete(type='VERT')
+    
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+
+def apply_smooth(obj):
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)
+    obj.select_set(True)
+    
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+    mod = obj.modifiers.new(name="Smooth", type='SMOOTH')
+    mod.factor = 0.5
+    mod.iterations = 1
+    bpy.ops.object.modifier_apply(modifier="Smooth")
 
 def make_object_collection(collection_name):
     for c in bpy.data.collections:
@@ -1127,8 +1164,8 @@ def bake_process(cs_obj):
 
 bl_info = {
     "name": "Cave Mapper",
-    "author": "Shota Kotake",
-    "version": (2, 1),
+    "author": "Cave Mapper",
+    "version": (2, 2, 7),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -1392,7 +1429,11 @@ class Run_Remesh(bpy.types.Operator):
         
         mesh_name = "UnionMesh"
         o3d_triangle_mesh = Process_remesh(bpy.context.selected_objects,voxel_size)
-        make_blenderBmesh_from_open3dTriangleMesh(o3d_triangle_mesh,mesh_name)
+        unioned_obj = make_blenderBmesh_from_open3dTriangleMesh(o3d_triangle_mesh,mesh_name)
+        
+        delete_small_poly_islands(unioned_obj)
+        
+        apply_smooth(unioned_obj)
                 
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
