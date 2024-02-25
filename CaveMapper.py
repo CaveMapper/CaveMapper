@@ -35,11 +35,10 @@ import textwrap
 
 global ini_verts
 global end_verts
-global len_to_center
-global max_len_to_center_selection
 global source_obj
 global selected_verts_id
 global canAdjustEffect
+global min_distance_list
 
 ini_verts = []
 end_verts = []
@@ -405,7 +404,6 @@ def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
         voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm)
     result_icp = refine_registration(source_down, target_down, source_fpfh, target_fpfh,
                                      voxel_size,ICP_coef)
-
     #print(result_icp.transformation)
     transform_bmesh(source_name,result_icp.transformation @ source_tfm)
     
@@ -414,15 +412,13 @@ def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
 def Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
     global ini_verts
     global end_verts
-    global len_to_center
-    global max_len_to_center_selection
     global source_obj
     global selected_verts_id
     global canAdjustEffect
+    global min_distance_list
     
     ini_verts = []
     end_verts = []
-    len_to_center = []
     
     obj = bpy.data.objects.get(source_name)
     mesh = obj.data
@@ -431,15 +427,9 @@ def Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FP
     
     ini_verts = [v.co.copy() for v in bm.verts]
     selected_verts = [v for v in bm.verts if v.select]
-    selected_verts_id = [v.index for v in bm.verts if v.select]
+    selected_verts_id = [v.index for v in bm.verts if v.select]    
     
-    center = Vector()
-    for v in selected_verts:
-        center += v.co
-    center /= len(selected_verts)    
-    len_to_center = [(co - center).length for co in ini_verts]
-    len_to_center_selection = [(v.co - center).length for v in selected_verts]
-    max_len_to_center_selection = max(len_to_center_selection)
+    min_distance_list = get_min_connected_distance(obj, selected_verts_id)
     
     source,source_tfm = bmesh_to_pcd(source_name,True)
     target,target_tfm = bmesh_to_pcd(target_name,False)
@@ -461,12 +451,10 @@ def Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FP
 def Process_apply_propotional_edit():
     global ini_verts
     global end_verts
-    global len_to_center
-    global max_len_to_center_selection
     global source_obj
     global selected_verts_id
     global canAdjustEffect
-    
+    global min_distance_list
     
     select_verts(source_obj,selected_verts_id)
 
@@ -478,17 +466,13 @@ def Process_apply_propotional_edit():
     bm = bmesh.from_edit_mesh(mesh) 
     
     for i, v in enumerate(bm.verts):
-        if el < len_to_center[i]:
-            c = 0.0
+        c = 1 - (min_distance_list[i] / el)
+        if c < 0:
+            c = 0
         else:
-            if max_len_to_center_selection > len_to_center[i]:
-                c = 1.0
-            else:
-                c = (el -len_to_center[i]) / (el - max_len_to_center_selection)
-            effected_verts_id.append(v.index)
- 
+            effected_verts_id.append(i)
         v.co = ini_verts[i] + (end_verts[i] - ini_verts[i]) * c
-    
+
     select_verts(source_obj,effected_verts_id)
     bmesh.update_edit_mesh(mesh)
     bm.free()
@@ -577,6 +561,101 @@ def Process_texture_reduction(image_reduction_ratio):
 #Blender functions
 ################################################################################
 
+#for propotional falloff editing
+def get_boundary_verts(mesh_object, selected_verts_id):
+    selected_verts_id_set = set(selected_verts_id)
+    boundary_verts_id = []
+    mesh = mesh_object.data
+    for edge in mesh.edges:        
+        bool0 = edge.vertices[0] in selected_verts_id_set
+        bool1 = edge.vertices[1] in selected_verts_id_set
+        if bool0 != bool1:
+            if bool0:
+                vvv = edge.vertices[0]
+            else:
+                vvv = edge.vertices[1]
+            
+            if vvv not in boundary_verts_id:
+                boundary_verts_id.append(vvv)
+    return boundary_verts_id
+
+def get_edge_length(mesh,edge_index):
+    i0 = mesh.edges[edge_index].vertices[0]
+    i1 = mesh.edges[edge_index].vertices[1]
+    v0 = mesh.vertices[i0].co
+    v1 = mesh.vertices[i1].co
+    distance = (v0 - v1).length
+    return distance
+
+def get_vertConection(mesh_object):
+    mesh = mesh_object.data
+    aaa = np.zeros((len(mesh.edges)*2, 3))
+    for edge in mesh.edges:
+        aaa[edge.index,0] = edge.vertices[0]
+        aaa[edge.index,1] = edge.vertices[1]
+        aaa[edge.index,2] = get_edge_length(mesh,edge.index)
+        aaa[len(mesh.edges) + edge.index,0] =edge.vertices[1]
+        aaa[len(mesh.edges) + edge.index,1] =edge.vertices[0]
+        aaa[len(mesh.edges) + edge.index,2] =aaa[edge.index,2]
+    bbb = aaa[np.argsort(aaa[:, 0])]
+    
+    vertConection = []    
+    temp =[]
+    i = 0
+    for b in bbb:
+        if i == int(b[0]):
+            temp.append([int(b[1]),b[2]])
+        else:
+            vertConection.append(temp)
+            temp =[]
+            i = int(b[0])
+            temp.append([int(b[1]),b[2]])
+    vertConection.append(temp)
+
+    return vertConection
+
+def get_min_connected_distance(mesh_object, selected_verts_id):
+    
+    mesh = mesh_object.data
+    
+    min_dist = [9999.9] * len(mesh.vertices)
+    is_active = ['yet'] * len(mesh.vertices)
+    conferm_verts = [] * len(mesh.vertices)
+    
+    boundary_verts_id = get_boundary_verts(mesh_object, selected_verts_id)
+    vertConection = get_vertConection(mesh_object)
+    
+    active_vert_id = copy.copy(boundary_verts_id)
+    
+    for i in selected_verts_id:
+        min_dist[i] = 0
+        is_active[i] = 'done'
+    
+    for i in boundary_verts_id:
+        is_active[i] = 'active'
+    
+    #main itaration
+    while (len(active_vert_id) >0):
+        active_verts_dist = [9999.9] * len(active_vert_id)
+        for i in range(len(active_vert_id)):
+            active_verts_dist[i] = min_dist[active_vert_id[i]]
+        v_id = active_vert_id[active_verts_dist.index(min(active_verts_dist))]
+        
+        for n_vert in vertConection[v_id]:
+            if is_active[n_vert[0]] !='done':
+                if is_active[n_vert[0]] =='yet':
+                    is_active[n_vert[0]] ='active'
+                    active_vert_id.append(n_vert[0])
+                d = min_dist[v_id] + n_vert[1]
+                if d < min_dist[n_vert[0]]:
+                    min_dist[n_vert[0]] = d
+        is_active[v_id] = 'done'
+        print(v_id)
+        active_vert_id.remove(v_id)
+    
+    return min_dist
+    
+#for after process of union    
 def delete_small_poly_islands(obj):
     for ob in bpy.context.scene.objects:
         ob.select_set(False)
@@ -611,6 +690,8 @@ def apply_smooth(obj):
     mod.factor = 0.5
     mod.iterations = 1
     bpy.ops.object.modifier_apply(modifier="Smooth")
+
+#
 
 def make_object_collection(collection_name):
     for c in bpy.data.collections:
@@ -1165,7 +1246,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 2, 7),
+    "version": (2, 2, 9),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
