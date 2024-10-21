@@ -32,6 +32,8 @@ import pkg_resources
 import subprocess
 import sys
 import textwrap
+import zipfile
+import shutil
 
 global ini_verts
 global end_verts
@@ -1238,6 +1240,37 @@ def bake_process(cs_obj):
     bake_texture(cs_obj, 'Mask Bake Models','Z Shade Image','z_shade')
     bake_texture(bpy.data.objects['scale_plane'], 'Scale','Scale Image','color')
 
+################################################################################
+#OS file control functions
+################################################################################
+def unzip_files(folder_path):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    
+    zip_files = [f for f in os.listdir(folder_path) if f.endswith('.zip')]
+    count = 1
+    
+    for zip_file in zip_files:
+        zip_file_path = os.path.join(folder_path, zip_file)
+        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+            extract_folder = os.path.join(folder_path, os.path.splitext(zip_file)[0])
+            zip_ref.extractall(extract_folder)
+            
+            glb_file_name = [f for f in os.listdir(extract_folder) if f.endswith('.glb')]
+            if glb_file_name:
+                src_glb_path = os.path.join(extract_folder, glb_file_name[0])
+                # 正しい連番を付ける
+                base_name = os.path.splitext(glb_file_name[0])[0]
+                dst_glb_name = f"{base_name}_{count}.glb"
+                dst_glb_path = os.path.join(folder_path, dst_glb_name)
+                
+                os.rename(src_glb_path, dst_glb_path)
+                count += 1
+
+        # 解凍後のフォルダを削除
+        shutil.rmtree(extract_folder)
+        # 元のzipファイルを削除
+        os.remove(zip_file_path)
 
 ################################################################################
 #Blender UI
@@ -1246,7 +1279,7 @@ def bake_process(cs_obj):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 2, 9),
+    "version": (2, 3, 1),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -1301,6 +1334,26 @@ class import_models(bpy.types.Operator):
             import_obj_collection.objects.link(raw_obj)
 
             i += 1
+        
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+
+class Unzip_glb(bpy.types.Operator):
+    bl_idname = "object.unzip_glb"
+    bl_label = "NOP"
+    bl_description = "Unzip glb files"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+        
+        #import glb files
+        scene = bpy.context.scene
+        
+        ext_str = "glb"
+        folderPath = bpy.path.abspath(scene.folder_path)
+
+        unzip_files(folderPath)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
@@ -1616,6 +1669,7 @@ class IMPORT_PT_CustomPanel(bpy.types.Panel):
         
         layout.label(text="Folder Path:")
         layout.prop(scene,"folder_path",text = "")
+        layout.operator(Unzip_glb.bl_idname, text="Ungip glb files", icon = 'SORTTIME')
         layout.operator(import_models.bl_idname, text="Import Models", icon = 'SORTTIME')
 
 class ALIGHMENT_PT_CustomPanel(bpy.types.Panel):
@@ -1908,6 +1962,7 @@ def clear_props():
 
 classes = [
     import_models,
+    Unzip_glb,
     Run_GR,
     Run_ICP,
     Run_Set_Target,
