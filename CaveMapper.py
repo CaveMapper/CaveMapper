@@ -34,6 +34,7 @@ import sys
 import textwrap
 import zipfile
 import shutil
+import re
 
 global ini_verts
 global end_verts
@@ -1256,21 +1257,36 @@ def unzip_files(folder_path):
             extract_folder = os.path.join(folder_path, os.path.splitext(zip_file)[0])
             zip_ref.extractall(extract_folder)
             
-            glb_file_name = [f for f in os.listdir(extract_folder) if f.endswith('.glb')]
-            if glb_file_name:
-                src_glb_path = os.path.join(extract_folder, glb_file_name[0])
-                # 正しい連番を付ける
-                base_name = os.path.splitext(glb_file_name[0])[0]
-                dst_glb_name = f"{base_name}_{count}.glb"
-                dst_glb_path = os.path.join(folder_path, dst_glb_name)
-                
-                os.rename(src_glb_path, dst_glb_path)
-                count += 1
-
-        # 解凍後のフォルダを削除
-        shutil.rmtree(extract_folder)
+            # 解凍後のファイルに対して元のZIPファイル名を付ける
+            for file_name in os.listdir(extract_folder):
+                src_file_path = os.path.join(extract_folder, file_name)
+                if os.path.isfile(src_file_path):
+                    file_extension = os.path.splitext(file_name)[1]
+                    new_file_name = f"{os.path.splitext(zip_file)[0]}{file_extension}"
+                    dst_file_path = os.path.join(folder_path, new_file_name)
+                    os.rename(src_file_path, dst_file_path)
+            
+            # 解凍後のフォルダを削除
+            shutil.rmtree(extract_folder)
+            
+        # フォルダ内のglbファイル名を順に調べて連番を付ける
+        for file_name in os.listdir(folder_path):
+            if file_name.endswith('.glb'):
+                base_name, file_extension = os.path.splitext(file_name)
+                match = re.search(r" \d+$", base_name)
+                if not match:
+                    new_file_name = f"{base_name} 01{file_extension}"
+                    os.rename(os.path.join(folder_path, file_name), os.path.join(folder_path, new_file_name))
+                else:
+                    # 連番が一桁の場合は2桁に変更
+                    num = int(match.group().strip())
+                    if num < 10:
+                        new_file_name = f"{base_name[:-len(match.group())]} {num:02}{file_extension}"
+                        os.rename(os.path.join(folder_path, file_name), os.path.join(folder_path, new_file_name))
+                        
         # 元のzipファイルを削除
         os.remove(zip_file_path)
+
 
 ################################################################################
 #Blender UI
@@ -1279,7 +1295,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 1),
+    "version": (2, 3, 2),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
