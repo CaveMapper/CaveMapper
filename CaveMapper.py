@@ -693,8 +693,8 @@ def apply_smooth(obj):
     mod.factor = 0.5
     mod.iterations = 1
     bpy.ops.object.modifier_apply(modifier="Smooth")
-
-#
+    
+    bpy.ops.object.shade_smooth()
 
 def make_object_collection(collection_name):
     for c in bpy.data.collections:
@@ -719,7 +719,230 @@ def get_objs_in_collection(collection_name):
     for c in bpy.data.collections:
         if c.name == collection_name:
             return c.all_objects
+        
+        
+### bake texture to union
+def max_blending(temp_image, comp_image):
+    """
+    temp_imageとcomp_imageを「比較明」で重ねて処理し、結果をcomp_imageに上書きする関数。
+    
+    Parameters:
+    temp_image (bpy.types.Image): 比較する一時的なテクスチャイメージ。
+    comp_image (bpy.types.Image): 上書きされる比較対象のテクスチャイメージ。
+    """
+    
+    """
+    # temp_imageとcomp_imageのサイズが同じであることを確認
+    if temp_image.size != comp_image.size:
+        print("テクスチャイメージのサイズが一致しません。")
+        return
+    """
+    
+    width, height = temp_image.size
+    
+    # ピクセルデータを取得
+    temp_pixels = np.array(temp_image.pixels[:])
+    comp_pixels = np.array(comp_image.pixels[:])
+    
+    # ピクセルデータの長さ確認
+    pixel_length = width * height * 4  # RGBA なので4チャンネル
+    
+    if len(temp_pixels) != pixel_length or len(comp_pixels) != pixel_length:
+        print("ピクセルデータの長さが一致しません。")
+        return
+    
+    # 比較明処理を行う
+    result_pixels = np.maximum(temp_pixels, comp_pixels)
+    
+    # 結果をcomp_imageに上書き
+    comp_image.pixels = result_pixels.tolist()
+    comp_image.update()
 
+
+def smart_uv_project_and_setup_material(obj, texture_size):
+    """
+    対象オブジェクトをUV展開し、新しいマテリアルとテクスチャイメージを設定する関数。    
+    Parameters:
+    obj (bpy.types.Object): UV展開とマテリアル設定を行うポリゴンメッシュオブジェクト。
+    texture_size (int): 新規作成するテクスチャイメージの幅と高さ。
+    """
+    # 1. 対象オブジェクトをアクティブにし、編集モードに切り替え
+    bpy.context.view_layer.objects.active = obj
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    
+    # Smart UV Projectを実行
+    bpy.ops.uv.smart_project(
+        angle_limit=0.5236, #use rad, not deg.
+        margin_method = 'ADD',
+        island_margin = bpy.context.scene.island_margin,
+        area_weight=0.0,
+        correct_aspect=True,
+        scale_to_bounds=False
+    )
+    
+    # オブジェクトモードに戻す
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    # 2. 同名のマテリアルが存在する場合は削除し、新しいマテリアルを作成
+    if "caveMaterial" in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials["caveMaterial"])
+    new_material = bpy.data.materials.new(name="caveMaterial")
+    
+    # 既存のマテリアルを削除し、新しいマテリアルを適用
+    obj.data.materials.clear()
+    obj.data.materials.append(new_material)
+    
+    # 3. 同名のテクスチャイメージが存在する場合は削除し、新しいテクスチャイメージを作成
+    if "temp texture" in bpy.data.images:
+        bpy.data.images.remove(bpy.data.images["temp texture"])
+    temp_texture_image = bpy.data.images.new(name="temp texture", width=texture_size, height=texture_size, alpha=True)    
+    # テクスチャイメージを (0, 0, 0, 0) で初期化
+    pixels = [0.0, 0.0, 0.0, 0.0] * (texture_size * texture_size) 
+    temp_texture_image.pixels = pixels 
+    temp_texture_image.update()
+    
+    # 3. 同名のテクスチャイメージが存在する場合は削除し、新しいテクスチャイメージを作成
+    if "comp texture" in bpy.data.images:
+        bpy.data.images.remove(bpy.data.images["comp texture"])
+    comp_texture_image = bpy.data.images.new(name="comp texture", width=texture_size, height=texture_size, alpha=True)    
+    # テクスチャイメージを (0, 0, 0, 0) で初期化
+    pixels = [0.0, 0.0, 0.0, 0.0] * (texture_size * texture_size) 
+    comp_texture_image.pixels = pixels 
+    comp_texture_image.update()
+
+    # マテリアルにノードを追加してテクスチャイメージを設定
+    if not new_material.use_nodes:
+        new_material.use_nodes = True
+    nodes = new_material.node_tree.nodes
+    temp_texture_node = nodes.new(type='ShaderNodeTexImage')
+    temp_texture_node.image = temp_texture_image
+    
+    comp_texture_node = nodes.new(type='ShaderNodeTexImage')
+    comp_texture_node.image = comp_texture_image
+    
+    # Shadingワークスペースに切り替える（オプション）
+    #bpy.context.window.workspace = bpy.data.workspaces['Shading']
+
+def bake_to_existing_texture(source_obj, target_obj):
+    # ターゲットオブジェクトをアクティブに
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)
+    source_obj.select_set(True)
+    target_obj.select_set(True)
+    bpy.context.view_layer.objects.active = target_obj
+    
+    # 既存の「temp texture」テクスチャイメージノードを取得
+    temp_texture_node = None
+    for mat in target_obj.data.materials:
+        if mat.use_nodes:
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.image.name == 'temp texture':
+                    temp_texture_node = node
+                    break
+        if temp_texture_node:
+            break
+
+    if not temp_texture_node:
+        print("ターゲットオブジェクトに 'temp texture' テクスチャイメージが見つかりませんでした。")
+        return
+
+    # テクスチャノードをアクティブに設定
+    bpy.context.view_layer.objects.active = target_obj
+    bpy.context.view_layer.objects.active.active_material_index = 0
+    target_obj.active_material.node_tree.nodes.active = temp_texture_node
+
+    # ベイク設定を行う
+    bake_common_setting()
+    bpy.ops.object.bake(
+        type='DIFFUSE',
+        pass_filter={'COLOR'},
+        margin = 2,
+        use_selected_to_active = True,
+        use_cage = False,
+        cage_extrusion = bpy.context.scene.union_bake_extrusion,
+        max_ray_distance = bpy.context.scene.union_bake_max_ray_distance,
+        use_clear = True,
+        target='IMAGE_TEXTURES'
+    )
+    
+    """
+    bpy.context.scene.render.engine = 'CYCLES'
+    bpy.context.scene.cycles.bake_type = 'DIFFUSE'
+    
+    bpy.context.scene.cycles.use_bake_selected_to_active = True
+    bpy.context.scene.cycles.use_cage = False
+    bpy.context.scene.cycles.cage_extrusion = bpy.context.scene.union_bake_extrusion
+    bpy.context.scene.cycles.max_ray_distance = bpy.context.scene.union_bake_max_ray_distance
+    bpy.context.scene.cycles.use_pass_direct = True
+    bpy.context.scene.cycles.use_pass_indirect = False
+    bpy.context.scene.cycles.use_pass_color = True
+    bpy.context.scene.cycles.use_clear = True
+    bpy.context.scene.cycles.bake_margin = 0
+
+    # ベイクを実行
+    bpy.ops.object.bake(type='DIFFUSE')
+    """
+
+def overwrite_alpha_zero_pixels(comp_image, custom_color):
+    """
+    アルファ値がゼロのピクセルをカスタムカラーで上書きする関数。
+
+    Parameters:
+    comp_image (bpy.types.Image): 上書きするテクスチャイメージ。
+    custom_color (tuple): 使用するカスタムカラー(R, G, B, A)。
+    """
+    # テクスチャイメージのサイズを取得
+    width, height = comp_image.size
+    
+    # ピクセルデータを取得
+    pixels = np.array(comp_image.pixels[:])
+    
+    # 各ピクセルをチェックし、アルファ値がゼロの場合にカスタムカラーで上書き
+    for i in range(0, len(pixels), 4):
+        if pixels[i+3] == 0.0:  # アルファ値がゼロ
+            pixels[i:i+4] = custom_color
+    
+    # 更新されたピクセルデータをテクスチャイメージに設定
+    comp_image.pixels = pixels.tolist()
+    comp_image.update()    
+
+def bake_texture_to_union(texture_size):
+    selected_objects = bpy.context.selected_objects
+    target_obj = bpy.context.view_layer.objects.active
+
+    if len(selected_objects) >= 2 and target_obj is not None:
+        
+        source_obj_list = [obj for obj in selected_objects if obj != target_obj]
+        smart_uv_project_and_setup_material(target_obj, texture_size)
+
+        for source_obj in source_obj_list:
+            bake_to_existing_texture(source_obj, target_obj)
+            
+            temp_image = bpy.data.images['temp texture']
+            comp_image = bpy.data.images['comp texture']
+            max_blending(temp_image, comp_image)
+        
+        overwrite_alpha_zero_pixels(comp_image, bpy.context.scene.bake_base_color)  
+        
+        for material in target_obj.data.materials:
+            if material and material.use_nodes:
+                nodes = material.node_tree.nodes
+                # ノードツリー内のすべてのノードを走査
+                for node in nodes:
+                    if node.type == 'TEX_IMAGE' and node.image and node.image.name == "temp texture":
+                        # ノードを削除
+                        nodes.remove(node)
+        if "temp texture" in bpy.data.images:
+            bpy.data.images.remove(bpy.data.images["temp texture"])
+
+#closs section
 def cave_model_pre_prs(obj):
     trs = bpy.app.translations.pgettext
     #set definition of collections
@@ -1295,7 +1518,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 2),
+    "version": (2, 3, 3),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -1539,6 +1762,28 @@ class Run_Decimate(bpy.types.Operator):
         decimate_ref_length = scene.decimate_ref_length
         
         Process_decimate(bpy.context.selected_objects, decimate_ref_length)
+        
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+
+class Run_Bake_Texture(bpy.types.Operator):
+    bl_idname = "object.run_bake_texture"
+    bl_label = "NOP"
+    bl_description = "down sizing meshes"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        if len(bpy.context.selected_objects) > 0:
+                return True
+        return False
+
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+        scene = bpy.context.scene
+        texture_size = scene.union_texture_size
+        
+        bake_texture_to_union(texture_size)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
@@ -1830,7 +2075,13 @@ class REMESH_PT_CustomPanel(bpy.types.Panel):
         layout.use_property_decorate = False  # No animation.
         
         layout.prop(scene, "Remesh_voxel_size", text="Voxcel Size")
-        layout.operator(Run_Remesh.bl_idname, text="Union")
+        layout.operator(Run_Remesh.bl_idname, text="Union", icon = 'SORTTIME')
+        layout.prop(scene, "union_texture_size", text="Texture Size")
+        layout.prop(scene, "island_margin", text="Island Margin")
+        layout.prop(scene, "union_bake_extrusion", text="Extrucion")
+        layout.prop(scene, "union_bake_max_ray_distance", text="Max Ray Distance")
+        layout.prop(scene, "bake_base_color", text="Base color")
+        layout.operator(Run_Bake_Texture.bl_idname, text="Bake Texture", icon = 'SORTTIME')
 
 class CROSS_SECTION_PT_CustomPanel(bpy.types.Panel):
     bl_label = "Cross Section"         # パネルのヘッダに表示される文字列
@@ -1956,6 +2207,42 @@ def init_props():
         max=10,
         subtype = 'PIXEL'
     ) 
+    scene.union_texture_size = IntProperty(
+        name="union_texture_size",
+        description="pixcel size of unioned model texture width and height",
+        default=4096,
+        min=1,
+        max=8192,
+        subtype = 'PIXEL'
+    ) 
+    scene.bake_base_color = FloatVectorProperty(
+        name="bake_base_color",
+        description="Base color for no baked areas",
+        subtype='COLOR', size=4, # RGBAの場合は4、RGBの場合は3
+        min=0.0,
+        max=1.0,
+        default=(0.0, 1.0, 0.0, 1.0) 
+    )
+    scene.island_margin = FloatProperty(
+        name="island_margin",
+        description="Island margin for UV unwrap of unioned model",
+        default=0.05,
+        min=0,
+    )
+    scene.union_bake_extrusion = FloatProperty(
+        name="union_bake_extrusion",
+        description="Extrusion for bake texture of the unioned model",
+        default=0.2,
+        min=0,
+        subtype = 'DISTANCE'
+    )
+    scene.union_bake_max_ray_distance = FloatProperty(
+        name="union_bake_max_ray_distance",
+        description="Max Ray Distance for bake texture of the unioned model",
+        default=0.5,
+        min=0,
+        subtype = 'DISTANCE'
+    )
 
 
 # プロパティを削除
@@ -1975,6 +2262,11 @@ def clear_props():
     del scene.scale_length
     del scene.cs_obj_name
     del scene.outline_tickness
+    del scene.union_texture_size
+    del scene.bake_base_color
+    del scene.union_bake_extrusion
+    del scene.union_bake_max_ray_distance
+    del scene.island_margin
 
 classes = [
     import_models,
@@ -1987,6 +2279,7 @@ classes = [
     Run_Decimate,
     Run_Texture_reduction,
     Run_Remesh,
+    Run_Bake_Texture,
     Run_cs_model_pre_prs,
     Run_cs_bake_and_composite,
     IMPORT_PT_CustomPanel,
