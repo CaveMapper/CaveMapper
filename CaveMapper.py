@@ -820,14 +820,24 @@ def smart_uv_project_and_setup_material(obj, texture_size):
     if not new_material.use_nodes:
         new_material.use_nodes = True
     nodes = new_material.node_tree.nodes
+    links = new_material.node_tree.links
+    
     temp_texture_node = nodes.new(type='ShaderNodeTexImage')
     temp_texture_node.image = temp_texture_image
     
     comp_texture_node = nodes.new(type='ShaderNodeTexImage')
     comp_texture_node.image = comp_texture_image
     
-    # Shadingワークスペースに切り替える（オプション）
-    #bpy.context.window.workspace = bpy.data.workspaces['Shading']
+    # 既存のPrincipled BSDFノードを取得
+    principled_bsdf_node = None
+    for node in nodes:
+        if node.type == 'BSDF_PRINCIPLED':
+            principled_bsdf_node = node
+            break
+    
+    # comp_texture_nodeのColor出力をPrincipled BSDFノードのBase Color入力に接続
+    if principled_bsdf_node is not None:        
+        links.new(comp_texture_node.outputs['Color'], principled_bsdf_node.inputs['Base Color'])
 
 def bake_to_existing_texture(source_obj, target_obj):
     # ターゲットオブジェクトをアクティブに
