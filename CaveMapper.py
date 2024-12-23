@@ -412,6 +412,45 @@ def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
     
     select_objs([target_name],source_name)
 
+def find_overlap_center(source, target, threshold):
+    # KD-Treeを作成して近傍点を検索
+    target_tree = o3d.geometry.KDTreeFlann(target)
+    
+    # オーバーラップ部分の点を格納するリスト
+    overlap_points = []
+    
+    # ソース点群の各点について、ターゲット点群内で近い点を検索
+    for point in source.points:
+        [k, idx, _] = target_tree.search_knn_vector_3d(point, 1)
+        if k > 0:
+            distance = np.linalg.norm(np.asarray(point) - np.asarray(target.points)[idx[0]])
+            if distance < threshold:
+                overlap_points.append(point)
+    
+    # オーバーラップ部分がない場合はNoneを返す
+    if len(overlap_points) == 0:
+        return None
+    
+    # オーバーラップ部分の点群を作成
+    overlap_point_cloud = o3d.geometry.PointCloud()
+    overlap_point_cloud.points = o3d.utility.Vector3dVector(np.array(overlap_points))
+    
+    # オーバーラップ部分の中心座標を計算
+    overlap_center = np.mean(np.asarray(overlap_point_cloud.points), axis=0)
+    
+    return overlap_center
+    
+def Process_Hrz_fix(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
+    source,source_tfm = bmesh_to_pcd(source_name,False)
+    target,target_tfm = bmesh_to_pcd(target_name,False)
+    
+    source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(
+        voxel_size, Aligment_FPFH_coef, source,source_tfm, target,target_tfm)
+    
+    overlap_center = find_overlap_center(source_down, target_down, voxel_size)
+    
+    return overlap_center    
+
 def Process_Partial_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
     global ini_verts
     global end_verts
@@ -563,6 +602,45 @@ def Process_texture_reduction(image_reduction_ratio):
 ################################################################################
 #Blender functions
 ################################################################################
+#for fix horizontal
+def fix_horizontal_by_overlap_centor(source_name,overlap_center_in_blender):
+    # 新しいEmptyオブジェクトを作成    
+    empty_obj = bpy.data.objects.new("Temp_Empty", None)
+    bpy.context.collection.objects.link(empty_obj)
+    empty_obj2 = bpy.data.objects.new("Temp_Empty2", None)
+    bpy.context.collection.objects.link(empty_obj2)
+
+    # 指定した座標位置に移動
+    empty_obj.location = overlap_center_in_blender
+    empty_obj2.location = overlap_center_in_blender
+
+    # 親オブジェクトを取得
+    parent_obj = bpy.data.objects.get(source_name)
+    
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)# すべての選択を解除
+    empty_obj.select_set(True)
+    parent_obj.select_set(True)
+    bpy.context.view_layer.objects.active = parent_obj
+    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+    
+    for ob in bpy.context.scene.objects:
+        ob.select_set(False)# すべての選択を解除
+    parent_obj.select_set(True)
+    bpy.context.view_layer.objects.active = parent_obj
+    bpy.context.object.rotation_mode = 'XYZ'
+    bpy.context.object.rotation_euler[0] = 0
+    bpy.context.object.rotation_euler[1] = 0
+    
+    bpy.context.view_layer.update()
+        
+    location_delta = empty_obj.matrix_world.translation - empty_obj2.matrix_world.translation
+    parent_obj.location = parent_obj.location - location_delta
+    
+    bpy.data.objects.remove(empty_obj, do_unlink=True)
+    bpy.data.objects.remove(empty_obj2, do_unlink=True)
+    
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
 
 #for propotional falloff editing
 def get_boundary_verts(mesh_object, selected_verts_id):
@@ -882,23 +960,6 @@ def bake_to_existing_texture(source_obj, target_obj):
         target='IMAGE_TEXTURES'
     )
     
-    """
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.scene.cycles.bake_type = 'DIFFUSE'
-    
-    bpy.context.scene.cycles.use_bake_selected_to_active = True
-    bpy.context.scene.cycles.use_cage = False
-    bpy.context.scene.cycles.cage_extrusion = bpy.context.scene.union_bake_extrusion
-    bpy.context.scene.cycles.max_ray_distance = bpy.context.scene.union_bake_max_ray_distance
-    bpy.context.scene.cycles.use_pass_direct = True
-    bpy.context.scene.cycles.use_pass_indirect = False
-    bpy.context.scene.cycles.use_pass_color = True
-    bpy.context.scene.cycles.use_clear = True
-    bpy.context.scene.cycles.bake_margin = 0
-
-    # ベイクを実行
-    bpy.ops.object.bake(type='DIFFUSE')
-    """
 
 def overwrite_alpha_zero_pixels(comp_image, custom_color):
     """
@@ -1528,7 +1589,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 3),
+    "version": (2, 3, 6),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -1669,6 +1730,46 @@ class Run_ICP(bpy.types.Operator):
         ICP_coef = scene.ICP_coef
         Aligment_FPFH_coef = scene.Aligment_FPFH_coef
         Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
+        
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+
+class Run_Hrz_fix(bpy.types.Operator):
+    bl_idname = "object.run_hrz_fix"
+    bl_label = "NOP"
+    bl_description = "Rotete X and Y to zero for fix horizontal after aligment"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        # オブジェクトが選択されているときのみメニューを表示させる
+        if len(bpy.context.selected_objects) == 2:
+            if bpy.context.active_object != None:
+                return True
+        return False
+
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+        
+        source_name = bpy.context.active_object.name
+        bpy.context.active_object.data.name = bpy.context.active_object.name
+        for o in bpy.context.selected_objects:
+            if o != bpy.context.active_object:
+                target_name = o.name
+                o.data.name = o.name
+                
+        scene = bpy.context.scene
+        
+        scene = bpy.context.scene
+        voxel_size = scene.Aligment_voxel_size
+        ICP_coef = scene.ICP_coef
+        Aligment_FPFH_coef = scene.Aligment_FPFH_coef
+        overlap_center_ndarray = Process_Hrz_fix(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
+        
+        if overlap_center_ndarray is not None:
+            overlap_center_in_blender = overlap_center_ndarray.tolist()
+            fix_horizontal_by_overlap_centor(source_name,overlap_center_in_blender)
+        bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
@@ -2010,6 +2111,7 @@ class PROCESS_PT_CustomPanel(bpy.types.Panel):
         #Run Buttom
         layout.operator(Run_GR.bl_idname, text="Rough Aligment" , icon = 'SORTTIME')
         layout.operator(Run_ICP.bl_idname, text="Fine Aligment", icon = 'SORTTIME')
+        layout.operator(Run_Hrz_fix.bl_idname, text="Fix Horizontal", icon = 'SORTTIME')
 
 class PARTIAL_PROCESS_PT_CustomPanel(bpy.types.Panel):
     bl_label = "Partial Alignment"         # パネルのヘッダに表示される文字列
@@ -2283,6 +2385,7 @@ classes = [
     Unzip_glb,
     Run_GR,
     Run_ICP,
+    Run_Hrz_fix,
     Run_Set_Target,
     Run_Partial_ICP,
     Run_Apply_propotional_edit,
