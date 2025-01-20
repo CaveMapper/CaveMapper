@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 '''
-Copyright <2024> <CaveMapper>
+Copyright <2025> <CaveMapper>
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -602,6 +602,30 @@ def Process_texture_reduction(image_reduction_ratio):
 ################################################################################
 #Blender functions
 ################################################################################
+#to treat incomplete object when import files
+def merge_empty_objects(obj):
+    if obj.type == 'EMPTY':
+
+        empty_name = obj.name
+        
+        mesh_objects = [child for child in obj.children if child.type == 'MESH']
+        for ob in bpy.context.scene.objects:
+            ob.select_set(False)# すべての選択を解除
+        for mesh in mesh_objects:
+            mesh.select_set(True)
+        bpy.context.view_layer.objects.active = mesh_objects[0]
+        bpy.ops.object.join()
+        
+        bpy.data.objects.remove(obj)
+        
+        print(empty_name)
+        mesh_objects = bpy.context.active_object      
+        mesh_objects.name=empty_name
+        
+        return mesh_objects
+    else:
+        return obj
+
 #for fix horizontal
 def fix_horizontal_by_overlap_centor(source_name,overlap_center_in_blender):
     # 新しいEmptyオブジェクトを作成    
@@ -1589,7 +1613,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 6),
+    "version": (2, 3, 7),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -1631,15 +1655,18 @@ class import_models(bpy.types.Operator):
             raw_obj = bpy.context.selected_objects[0]
             bpy.context.view_layer.objects.active = raw_obj
             
-            bpy.context.object.color = setObjColor(i)
-            
+            print(raw_obj.name)
+            print(raw_obj.type)
+                    
             obj_name = filename.replace("." + ext_str, "")
             if obj_name != raw_obj.name:
                 raw_obj.name = obj_name
+                raw_obj = merge_empty_objects(raw_obj)
                 raw_obj.data.name = obj_name          
                                 
             bpy.ops.object.shade_smooth()
-            
+            bpy.context.object.color = setObjColor(i)
+                        
             bpy.context.scene.collection.objects.unlink(raw_obj)
             import_obj_collection.objects.link(raw_obj)
 
