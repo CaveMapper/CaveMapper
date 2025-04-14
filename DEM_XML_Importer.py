@@ -371,30 +371,28 @@ class DEM_XML_PT_CustomPanel(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Dem xml 読込"
 
-    def draw(self, context):
+    def draw(self, context):        
+
         layout = self.layout
-        is_static_map = context.scene.is_static_map
+        is_static_map = bpy.context.scene.is_static_map
 
-        if not is_static_map:
+        layout.operator("demxml.install_python_module", text="Static Map インストール", icon='SORTTIME')
+        layout.separator()
+        layout.separator()
 
-            layout.operator("demxml.install_python_module", text="Static Map インストール", icon='SORTTIME')
-            layout.separator()
-            layout.separator()
+        layout.separator()
+        layout.prop(context.scene, "get_texture", text="テクスチャを取得する")
 
-        if is_static_map:
-            layout.separator()
-            layout.prop(context.scene, "get_texture", text="テクスチャを取得する")
-
-            row = layout.row()
-            row.label(text="ズームレベル:")  # テキストを追加
-            row.prop(context.scene, "zoom_level", text="")  # ボックスのみを表示
+        row = layout.row()
+        row.label(text="ズームレベル:")  # テキストを追加
+        row.prop(context.scene, "zoom_level", text="")  # ボックスのみを表示
 
         layout.operator("demxml.folder_file_operator", text="フォルダ指定xml読込", icon='SORTTIME')
 
-        if is_static_map:
-            layout.separator()
-            layout.separator()
-            layout.operator("demxml.change_texture", text="テクスチャ切替")
+        layout.separator()
+        layout.separator()
+        layout.separator()
+        layout.operator("demxml.change_texture", text="テクスチャ切替")
 
 # フォルダ内ファイル読込のオペレータークラス
 class DEMXML_OT_FolderFileOperator(bpy.types.Operator):
@@ -433,13 +431,14 @@ class DEMXML_OT_FolderFileOperator(bpy.types.Operator):
 
             print(f"context.scene.get_texture: {context.scene.get_texture}")
             if context.scene.get_texture == True:
-                # テクスチャ取得
-                zoom_level = context.scene.zoom_level
-                calculate_pixel_dimensions(xml_file, zoom_level)
+                current_version = lib_ver_checker("staticmap")
+                if current_version == "0.5.6":
+                    # テクスチャ取得
+                    zoom_level = context.scene.zoom_level
+                    calculate_pixel_dimensions(xml_file, zoom_level)
 
-                set_new_material(xml_file)
-            
-        
+                    set_new_material(xml_file)
+
         bpy.context.space_data.clip_end = 50000
         bpy.ops.view3d.view_selected()
         bpy.context.window.cursor_set("DEFAULT")
@@ -485,10 +484,9 @@ class DEMXML_OT_InstallPythonModule(bpy.types.Operator):
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
 
-
-
 # クラスの登録と解除
-classes = [DEM_XML_PT_CustomPanel, DEMXML_OT_FolderFileOperator, DEMXML_OT_ChangeTexture, DEMXML_OT_InstallPythonModule]
+classes = [DEM_XML_PT_CustomPanel, DEMXML_OT_FolderFileOperator, DEMXML_OT_ChangeTexture, DEMXML_OT_InstallPythonModule] 
+
 
 def register():  
     # プロパティを登録
@@ -515,14 +513,11 @@ def register():
         default=False
     )
 
-    current_version = lib_ver_checker("staticmap")
-    if current_version == "0.5.6":
-        bpy.context.scene.is_static_map = True  # インストール済みの場合はTrueに設定
-        bpy.context.scene.get_texture = True       
-
     for cls in classes:
         bpy.utils.register_class(cls)
 
+
+   
 def unregister():
     for cls in classes:
         bpy.utils.unregister_class(cls)
