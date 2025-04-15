@@ -19,7 +19,7 @@ a = 6378137.0  # 長半径（赤道半径）
 f = 1 / 298.257223563  # 扁平率
 
 # テクスチャ切替フラグを保持するためのグローバル変数
-toggle_flag = True    
+toggle_flag = 1    
     
 def get_northwest_coordinates(xml_file_paths):
     northwest_coords = None
@@ -288,32 +288,57 @@ def toggle_texture_in_dem_materials():
     # 名前に「DEM」が含まれるマテリアルを検索
     dem_materials = [mat for mat in bpy.data.materials if mat.name.startswith("DEM_")]
     
-    # 該当する各マテリアルを処理
-    for material in dem_materials:
-        if material.use_nodes:  # ノードが有効化されている場合のみ処理
-            nodes = material.node_tree.nodes
+    if toggle_flag < 2:
+        set_solid_mode_color_type('TEXTURE')
+
+        # 該当する各マテリアルを処理
+        for material in dem_materials:
+            if material.use_nodes:  # ノードが有効化されている場合のみ処理
+                nodes = material.node_tree.nodes
             
-            # Texture Node（ShaderNodeTexImage）を検索
-            texture_node = next((node for node in nodes if node.type == "TEX_IMAGE"), None)
+                # Texture Node（ShaderNodeTexImage）を検索
+                texture_node = next((node for node in nodes if node.type == "TEX_IMAGE"), None)
             
-            if texture_node:
-                # 日付を取得
-                match = re.search(r"(\d{4}-\d{2}-\d{2})", material.name)  # 正規表現でマッチング
-                date_str = match.group(1) if match else None  # マッチすれば抽出、なければNone
+                if texture_node:
+                    # 日付を取得
+                    match = re.search(r"(\d{4}-\d{2}-\d{2})", material.name)  # 正規表現でマッチング
+                    date_str = match.group(1) if match else None  # マッチすれば抽出、なければNone
                 
-                # 使用する画像名を切り替え
-                image_name = f"{date_str}_seamlessphoto.png" if toggle_flag else f"{date_str}_std.png"
+                    # 使用する画像名を切り替え
+                    image_name = f"{date_str}_seamlessphoto.png" if toggle_flag else f"{date_str}_std.png"
                 
-                # 新しい画像を設定
-                image = bpy.data.images.get(image_name)
-                if image:
-                    texture_node.image = image
-                    print(f"マテリアル '{material.name}' のテクスチャを '{image_name}' に変更しました。")
-                else:
-                    print(f"画像 '{image_name}' が見つかりませんでした。")
+                    # 新しい画像を設定
+                    image = bpy.data.images.get(image_name)
+                    if image:
+                        texture_node.image = image
+                        print(f"マテリアル '{material.name}' のテクスチャを '{image_name}' に変更しました。")
+                    else:
+                        print(f"画像 '{image_name}' が見つかりませんでした。")
+
+    if toggle_flag == 2:
+        set_solid_mode_color_type('MATERIAL')
     
     # フラグを切り替え
-    toggle_flag = not toggle_flag
+    if toggle_flag == 2:
+        toggle_flag = 0
+    else:
+        toggle_flag += 1
+
+def set_solid_mode_color_type(color_type):
+    """
+    3Dビューのソリッドモードでシェーディングカラーをテクスチャに変更する関数。
+    """
+    # 3Dビューを取得
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':  # 3Dビューか確認
+            space = area.spaces.active
+
+            # シェーディングモードをソリッドに設定
+            space.shading.type = 'SOLID'
+
+            # ソリッドモードのカラーをテクスチャに変更
+            space.shading.color_type = color_type  # 'TEXTURE' を設定
+            print("3Dビューのソリッドモードのカラーをテクスチャに設定しました。")
 
 def lib_ver_checker(package_name):
     pkg_resources._initialize()
@@ -344,7 +369,6 @@ def install_packeage(package_name,target_version):
         print(f"{package_name}=={target_version} is already installed")
 
 
-
 ##########################################################################
 #ここからblender UI実装
 ##########################################################################
@@ -352,7 +376,7 @@ def install_packeage(package_name,target_version):
 bl_info = {
     "name": "DEM XML Importer",
     "author": "Cave Mapper",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "国土地理院webサイトから取得したxml形式の数値標高モデルをBlenderに取り込む",
@@ -374,25 +398,30 @@ class DEM_XML_PT_CustomPanel(bpy.types.Panel):
     def draw(self, context):        
 
         layout = self.layout
-        is_static_map = bpy.context.scene.is_static_map
+        is_static_map = True if lib_ver_checker('staticmap') == '0.5.6' else False
+        print(f"is_static_map: {is_static_map}")
 
-        layout.operator("demxml.install_python_module", text="Static Map インストール", icon='SORTTIME')
-        layout.separator()
-        layout.separator()
+        if is_static_map == False:
+            layout.operator("demxml.install_python_module", text="Static Map インストール", icon='SORTTIME')
+            layout.separator()
+            layout.separator()
 
-        layout.separator()
-        layout.prop(context.scene, "get_texture", text="テクスチャを取得する")
-
-        row = layout.row()
-        row.label(text="ズームレベル:")  # テキストを追加
-        row.prop(context.scene, "zoom_level", text="")  # ボックスのみを表示
+        if is_static_map == True:
+            layout.separator()
+            layout.prop(context.scene, "get_texture", text="テクスチャを取得する")
+            
+            row = layout.row()
+            row.label(text="ズームレベル:")  # テキストを追加
+            row.prop(context.scene, "zoom_level", text="")  # ボックスのみを表示
 
         layout.operator("demxml.folder_file_operator", text="フォルダ指定xml読込", icon='SORTTIME')
 
-        layout.separator()
-        layout.separator()
-        layout.separator()
-        layout.operator("demxml.change_texture", text="テクスチャ切替")
+        if is_static_map == True:
+            layout.separator()
+            layout.separator()
+            layout.separator()
+            layout.operator("demxml.change_texture", text="テクスチャ切替")
+
 
 # フォルダ内ファイル読込のオペレータークラス
 class DEMXML_OT_FolderFileOperator(bpy.types.Operator):
@@ -430,14 +459,15 @@ class DEMXML_OT_FolderFileOperator(bpy.types.Operator):
             process_xml_and_generate_mesh(xml_file, northwest_coords)
 
             print(f"context.scene.get_texture: {context.scene.get_texture}")
-            if context.scene.get_texture == True:
-                current_version = lib_ver_checker("staticmap")
-                if current_version == "0.5.6":
+            if lib_ver_checker('staticmap') == '0.5.6':
+                if context.scene.get_texture == True:
                     # テクスチャ取得
                     zoom_level = context.scene.zoom_level
                     calculate_pixel_dimensions(xml_file, zoom_level)
 
                     set_new_material(xml_file)
+
+                    set_solid_mode_color_type('TEXTURE')
 
         bpy.context.space_data.clip_end = 50000
         bpy.ops.view3d.view_selected()
@@ -478,9 +508,7 @@ class DEMXML_OT_InstallPythonModule(bpy.types.Operator):
 
     def execute(self, context):
         bpy.context.window.cursor_set("WAIT")
-        bpy.ops.wm.console_toggle()
         install_packeage('staticmap','0.5.6')
-        bpy.ops.wm.console_toggle()
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
 
@@ -496,7 +524,7 @@ def register():
     bpy.types.Scene.get_texture = bpy.props.BoolProperty(
         name="get_texture",
         description="国土地理院から対応する範囲の地形図と航空写真を取得し、テクスチャとして設定します。インターネットに接続して使う必要があります。",
-        default=False
+        default=True
     )
 
     bpy.types.Scene.zoom_level = bpy.props.IntProperty(
@@ -505,12 +533,6 @@ def register():
         default=16,
         min=14,  # 最小値
         max=18  # 最大値
-    )
-
-    bpy.types.Scene.is_static_map = bpy.props.BoolProperty(
-        name="isStaticMap",
-        description="Static Mapがインストールされているかどうかを示します。",
-        default=False
     )
 
     for cls in classes:
@@ -527,7 +549,6 @@ def unregister():
 
     del bpy.types.Scene.get_texture
     del bpy.types.Scene.zoom_level
-    del bpy.types.Scene.is_static_map
 
 if __name__ == "__main__":
     register()
