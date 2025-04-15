@@ -9,6 +9,9 @@ CaveMapperのマニュアルを以下に記す。CaveMapperの利用にあたっ
 ## 3Dスキャンに関する知見
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/01_Introduction_of_3D_Scanning" >**洞窟3Dスキャン入門**</a>  
 - <a href = "https://github.com/CaveMapper/CaveMapper/wiki/03_Blender_Advanced_Technique" >**Blender応用テクニック**</a>  
+- <a href = "https://github.com/CaveMapper/CaveMapper/wiki/05_DEM_XML_Importer_Manual" >**DEM XML Importer マニュアル**</a>  -国土地理院　数値標高データをBlenderへ取込むアドオン
+
+## 3Dスキャン結果の例
 - <a href = "https://cavemapper.github.io/CaveViewer/" >**3Dスキャンデータの例**</a>
 - <a href = "https://cavemapper.github.io/CaveViewer/CaveExplorer/" >**バーチャル洞窟探索デモ**</a> 
 
