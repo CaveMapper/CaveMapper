@@ -892,9 +892,10 @@ def smart_uv_project_and_setup_material(obj, texture_size):
     bpy.ops.object.mode_set(mode='OBJECT')
     
     # 2. 同名のマテリアルが存在する場合は削除し、新しいマテリアルを作成
-    if "caveMaterial" in bpy.data.materials:
-        bpy.data.materials.remove(bpy.data.materials["caveMaterial"])
-    new_material = bpy.data.materials.new(name="caveMaterial")
+    matName = obj.name + "_material"
+    if matName in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[matName])
+    new_material = bpy.data.materials.new(name=matName)
     
     # 既存のマテリアルを削除し、新しいマテリアルを適用
     obj.data.materials.clear()
@@ -910,9 +911,9 @@ def smart_uv_project_and_setup_material(obj, texture_size):
     temp_texture_image.update()
     
     # 3. 同名のテクスチャイメージが存在する場合は削除し、新しいテクスチャイメージを作成
-    if "comp texture" in bpy.data.images:
-        bpy.data.images.remove(bpy.data.images["comp texture"])
-    comp_texture_image = bpy.data.images.new(name="comp texture", width=texture_size, height=texture_size, alpha=True)    
+    if obj.name in bpy.data.images:
+        bpy.data.images.remove(bpy.data.images[obj.name])
+    comp_texture_image = bpy.data.images.new(name=obj.name, width=texture_size, height=texture_size, alpha=True)    
     # テクスチャイメージを (0, 0, 0, 0) で初期化
     pixels = [0.0, 0.0, 0.0, 0.0] * (texture_size * texture_size) 
     comp_texture_image.pixels = pixels 
@@ -1021,7 +1022,7 @@ def bake_texture_to_union(texture_size):
             bake_to_existing_texture(source_obj, target_obj)
             
             temp_image = bpy.data.images['temp texture']
-            comp_image = bpy.data.images['comp texture']
+            comp_image = bpy.data.images[target_obj.name]
             max_blending(temp_image, comp_image)
         
         overwrite_alpha_zero_pixels(comp_image, bpy.context.scene.bake_base_color)  
@@ -1036,6 +1037,15 @@ def bake_texture_to_union(texture_size):
                         nodes.remove(node)
         if "temp texture" in bpy.data.images:
             bpy.data.images.remove(bpy.data.images["temp texture"])
+
+        # 保存処理の追加
+        blend_file_path = bpy.path.abspath("//")  # 現在開いている Blender ファイルのディレクトリ
+        save_path = os.path.join(blend_file_path, f"{target_obj.name}.png")
+        # 画像をPNGとして保存
+        comp_image.filepath_raw = save_path
+        comp_image.file_format = 'PNG'
+        comp_image.save()
+        #print(f"Texture saved at: {save_path}")
 
 #closs section
 def cave_model_pre_prs(obj):
@@ -1613,7 +1623,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 7),
+    "version": (2, 3, 8),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
