@@ -1963,7 +1963,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 8),
+    "version": (2, 3, 15),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
