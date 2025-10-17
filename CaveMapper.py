@@ -323,15 +323,60 @@ def downsize_point_cloud_with_normal(pcd, voxel_size):
     pcd_down = pcd.voxel_down_sample(voxel_size)
     
     return pcd_down
-    
+
+
+def filter_overlap_regions(source, target, threshold=2.0):
+    """
+    KDTreeを使用してsourceとtargetの重複領域の点のみを抽出
+
+    Parameters:
+    -----------
+    source : o3d.geometry.PointCloud
+        ソース点群
+    target : o3d.geometry.PointCloud
+        ターゲット点群
+    threshold : float
+        重複判定の距離閾値（デフォルト: 2.0）
+
+    Returns:
+    --------
+    source_filtered, target_filtered : フィルタリング後の点群
+    """
+    print(f":: Filtering overlap regions (threshold={threshold})")
+
+    # 元の点数
+    source_size = len(source.points)
+    target_size = len(target.points)
+
+    # sourceをフィルタリング（法線も自動的に保持される）
+    distances_s = source.compute_point_cloud_distance(target)
+    distances_s = np.asarray(distances_s)
+    source_filtered = source.select_by_index(np.where(distances_s < threshold)[0])
+
+    # targetをフィルタリング（法線も自動的に保持される）
+    distances_t = target.compute_point_cloud_distance(source)
+    distances_t = np.asarray(distances_t)
+    target_filtered = target.select_by_index(np.where(distances_t < threshold)[0])
+
+    # フィルタリング結果を表示
+    source_filtered_size = len(source_filtered.points)
+    target_filtered_size = len(target_filtered.points)
+
+    print(f"   Source: {source_size} -> {source_filtered_size} points ({100*source_filtered_size/source_size:.1f}%)")
+    print(f"   Target: {target_size} -> {target_filtered_size} points ({100*target_filtered_size/target_size:.1f}%)")
+
+    return source_filtered, target_filtered
 
 def prepare_dataset(voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm):
     print(":: Load two point clouds and disturb initial pose.")
-    
+
     source.transform(source_tfm)
     target.transform(target_tfm)
-    
+
     #draw_registration_result(source, target, np.identity(4))
+
+    # 重複領域フィルタリング
+    source, target = filter_overlap_regions(source, target, threshold=2.0)
 
     source_down, source_fpfh = preprocess_point_cloud(source, voxel_size, Aligment_FPFH_coef)
     target_down, target_fpfh = preprocess_point_cloud(target, voxel_size, Aligment_FPFH_coef)
@@ -382,6 +427,156 @@ def refine_registration(source, target, source_fpfh, target_fpfh, voxel_size,ICP
         o3d.pipelines.registration.TransformationEstimationPointToPlane())
     return result
 
+def refine_7dof_registration(source, target, source_fpfh, target_fpfh, voxel_size, ICP_coef):
+    distance_threshold = voxel_size * ICP_coef
+    trans_init = np.identity(4)
+
+    print(":: 7DoF ICP registration with scaling is applied")
+    print("   Distance threshold %.3f." % distance_threshold)
+
+    # 反復Umeyama法による7DoF ICP
+    max_iterations = 30
+    convergence_threshold = 1e-6
+
+    current_transform = trans_init.copy()
+    transformed_source = copy.deepcopy(source)
+
+    for iteration in range(max_iterations):
+        # 対応点探索
+        correspondences = find_correspondences(transformed_source, target, distance_threshold)
+
+        if len(correspondences) < 10:
+            print(f"Warning: Only {len(correspondences)} correspondences found")
+            break
+
+        # 7DoF変換推定（Umeyama法）
+        delta_transform, delta_scale = umeyama_7dof(correspondences, transformed_source, target)
+
+        # 収束判定
+        transform_change = np.linalg.norm(delta_transform[:3, 3])
+        rotation_change = np.arccos(np.clip((np.trace(delta_transform[:3, :3]) - 1) / 2, -1, 1))
+        scale_change = abs(delta_scale - 1.0)
+
+        print(f"Iteration {iteration + 1}: transform_change={transform_change:.6f}, "
+              f"rotation_change={rotation_change:.6f}, scale={delta_scale:.6f}, scale_change={scale_change:.6f}")
+
+        if (transform_change < convergence_threshold and
+            rotation_change < convergence_threshold and
+            scale_change < convergence_threshold):
+            print(f"Converged after {iteration + 1} iterations")
+            break
+
+        # 変換更新（重要：delta_transformにはすでにスケールが含まれている）
+        current_transform = delta_transform @ current_transform
+
+        # 点群更新（シンプルに変換のみ適用）
+        transformed_source = copy.deepcopy(source)
+        transformed_source.transform(current_transform)
+
+    # 最終変換行列を返す（current_transformにスケールが含まれている）
+    print(f"\nFinal transformation matrix:")
+    print(current_transform)
+
+    # 結果オブジェクトを作成
+    class RegistrationResult:
+        def __init__(self, transformation):
+            self.transformation = transformation
+
+    return RegistrationResult(current_transform)
+
+def umeyama_7dof(correspondences, source, target):
+    """Umeyama法による7DoF変換推定"""
+    if len(correspondences) < 4:
+        return np.identity(4), 1.0
+
+    # 対応点を抽出
+    source_points = np.asarray([source.points[i] for i, j in correspondences])
+    target_points = np.asarray([target.points[j] for i, j in correspondences])
+
+    # 重心計算
+    source_centroid = np.mean(source_points, axis=0)
+    target_centroid = np.mean(target_points, axis=0)
+
+    # 重心化
+    source_centered = source_points - source_centroid
+    target_centered = target_points - target_centroid
+
+    # スケール推定（RMS距離の比）
+    source_scale = np.sqrt(np.mean(np.sum(source_centered**2, axis=1)))
+    target_scale = np.sqrt(np.mean(np.sum(target_centered**2, axis=1)))
+
+    if source_scale < 1e-8:
+        return np.identity(4), 1.0
+
+    scale = target_scale / source_scale
+
+    # 正規化（スケール除去後に回転を推定）
+    source_normalized = source_centered / source_scale
+    target_normalized = target_centered / target_scale
+
+    # 共分散行列
+    H = source_normalized.T @ target_normalized
+
+    # SVD分解
+    U, S, Vt = np.linalg.svd(H)
+
+    # 回転行列計算
+    R = Vt.T @ U.T
+
+    # 反射の修正
+    if np.linalg.det(R) < 0:
+        Vt[-1, :] *= -1
+        R = Vt.T @ U.T
+
+    # 平行移動計算（修正版）
+    t = target_centroid - R @ (scale * source_centroid)
+
+    # 変換行列構築（スケールを回転行列に統合）
+    transform = np.identity(4)
+    transform[:3, :3] = scale * R  # スケール付き回転
+    transform[:3, 3] = t
+
+    return transform, scale
+
+def find_correspondences(source, target, distance_threshold):
+    """KDTreeによる対応点探索"""
+    correspondences = []
+    target_tree = o3d.geometry.KDTreeFlann(target)
+    
+    for i, point in enumerate(source.points):
+        [k, idx, _] = target_tree.search_radius_vector_3d(point, distance_threshold)
+        if k > 0:
+            # 最近傍点を選択
+            correspondences.append((i, idx[0]))
+    
+    return correspondences
+
+def estimate_scale_from_correspondences(correspondences, source, target):
+    """対応点からスケール推定"""
+    if len(correspondences) < 10:
+        return 1.0
+    
+    source_points = np.asarray([source.points[i] for i, j in correspondences])
+    target_points = np.asarray([target.points[j] for i, j in correspondences])
+    
+    source_centroid = np.mean(source_points, axis=0)
+    target_centroid = np.mean(target_points, axis=0)
+    
+    source_distances = np.linalg.norm(source_points - source_centroid, axis=1)
+    target_distances = np.linalg.norm(target_points - target_centroid, axis=1)
+    
+    # 距離が小さすぎる点を除外
+    valid_mask = source_distances > 1e-6
+    source_distances = source_distances[valid_mask]
+    target_distances = target_distances[valid_mask]
+    
+    if len(source_distances) == 0:
+        return 1.0
+    
+    # メディアン比を使用（外れ値に対してロバスト）
+    scale_ratios = target_distances / source_distances
+    return np.median(scale_ratios)
+
 
 ################################################################################
 #Process Functions
@@ -410,6 +605,57 @@ def Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
     #print(result_icp.transformation)
     transform_bmesh(source_name,result_icp.transformation @ source_tfm)
     
+    select_objs([target_name],source_name)
+
+def Process_7DoF_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef):
+    source,source_tfm = bmesh_to_pcd(source_name,False)
+    target,target_tfm = bmesh_to_pcd(target_name,False)
+
+    source, target, source_down, target_down, source_fpfh, target_fpfh = prepare_dataset(
+        voxel_size, Aligment_FPFH_coef,source,source_tfm, target,target_tfm)
+    result_icp = refine_7dof_registration(source_down, target_down, source_fpfh, target_fpfh,
+                                     voxel_size,ICP_coef)
+
+    # 最終変換行列を計算
+    final_transform_np = result_icp.transformation @ source_tfm
+
+    # NumPy配列をBlender Matrixに変換
+    final_transform_blender = mathutils.Matrix.Identity(4)
+    for i in range(4):
+        for j in range(4):
+            final_transform_blender[i][j] = final_transform_np[i][j]
+
+    # Blenderの分解機能で平行移動、回転、スケールを抽出
+    loc, rot, scale = final_transform_blender.decompose()
+
+    print(f"Decomposed transformation:")
+    print(f"  Location: {loc}")
+    print(f"  Rotation (quaternion): {rot}")
+    print(f"  Scale: {scale}")
+
+    # スケールなし変換行列を再構築
+    transform_no_scale = mathutils.Matrix.LocRotScale(loc, rot, (1.0, 1.0, 1.0))
+
+    # オブジェクトを取得
+    source_obj = bpy.data.objects.get(source_name)
+
+    # アニメーション付きで位置・回転を適用
+    transform_anime(source_obj, transform_no_scale, 1, 10)
+
+    # スケールを頂点座標に直接適用
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+    bpy.ops.object.select_all(action='DESELECT')
+    source_obj.select_set(True)
+    bpy.context.view_layer.objects.active = source_obj
+
+    # 一時的にスケールを設定
+    source_obj.scale = scale
+
+    # スケールをメッシュデータに適用（頂点座標を直接変換）
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    print(f"Applied scale to mesh vertices: {scale}")
+
     select_objs([target_name],source_name)
 
 def find_overlap_center(source, target, threshold):
@@ -624,6 +870,100 @@ def merge_empty_objects(obj):
         
         return mesh_objects
     else:
+        return obj
+
+def merge_nested_empty_objects(obj):
+    """
+    再帰的にEmpty階層を解決してメッシュを1つに統合
+    どんな階層構造（深い階層、フラット、混在）でも対応
+    """
+    if obj is None:
+        return None
+    
+    def collect_all_meshes(current_obj, mesh_list):
+        """再帰的にメッシュオブジェクトを収集"""
+        if current_obj.type == 'MESH':
+            mesh_list.append(current_obj)
+        for child in current_obj.children:
+            collect_all_meshes(child, mesh_list)
+    
+    # ルートオブジェクトの名前を保持
+    root_name = obj.name
+    
+    # 全階層からメッシュオブジェクトを収集
+    all_meshes = []
+    collect_all_meshes(obj, all_meshes)
+    
+    # メッシュが見つからない場合
+    if len(all_meshes) == 0:
+        print(f"Warning: No mesh objects found in {root_name}")
+        return obj
+    
+    # メッシュが1つだけの場合
+    if len(all_meshes) == 1:
+        mesh_obj = all_meshes[0]
+        # 親子関係を解除してルートに移動
+        if mesh_obj.parent:
+            # 親の変換を適用してから親子関係を解除
+            mesh_obj.select_set(True)
+            bpy.context.view_layer.objects.active = mesh_obj
+            bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+        
+        # Empty階層を削除
+        def delete_empty_hierarchy(current_obj):
+            """再帰的にEmpty階層を削除"""
+            children_to_delete = [child for child in current_obj.children if child.type == 'EMPTY']
+            for child in children_to_delete:
+                delete_empty_hierarchy(child)
+                bpy.data.objects.remove(child)
+        
+        if obj.type == 'EMPTY':
+            delete_empty_hierarchy(obj)
+            bpy.data.objects.remove(obj)
+        
+        mesh_obj.name = root_name
+        return mesh_obj
+    
+    # 複数メッシュの場合は結合
+    try:
+        # すべての選択を解除
+        for ob in bpy.context.scene.objects:
+            ob.select_set(False)
+        
+        # すべてのメッシュを選択
+        for mesh in all_meshes:
+            mesh.select_set(True)
+        
+        # アクティブオブジェクトを設定
+        bpy.context.view_layer.objects.active = all_meshes[0]
+        
+        # 親子関係をクリアしてから結合（変換を保持）
+        bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+        
+        # メッシュを結合
+        bpy.ops.object.join()
+        
+        # 結合されたオブジェクトを取得
+        merged_obj = bpy.context.active_object
+        merged_obj.name = root_name
+        
+        # Empty階層を削除
+        def delete_empty_hierarchy(current_obj):
+            """再帰的にEmpty階層を削除"""
+            children_to_delete = [child for child in current_obj.children if child.type == 'EMPTY']
+            for child in children_to_delete:
+                delete_empty_hierarchy(child)
+                bpy.data.objects.remove(child)
+        
+        if obj.type == 'EMPTY':
+            delete_empty_hierarchy(obj)
+            bpy.data.objects.remove(obj)
+        
+        print(f"Successfully merged {len(all_meshes)} meshes into {root_name}")
+        return merged_obj
+        
+    except Exception as e:
+        print(f"Error merging objects in {root_name}: {e}")
         return obj
 
 #for fix horizontal
@@ -1671,8 +2011,10 @@ class import_models(bpy.types.Operator):
             obj_name = filename.replace("." + ext_str, "")
             if obj_name != raw_obj.name:
                 raw_obj.name = obj_name
-                raw_obj = merge_empty_objects(raw_obj)
-                raw_obj.data.name = obj_name          
+                # 複雑な階層構造に対応した新しいマージ関数を使用
+                raw_obj = merge_nested_empty_objects(raw_obj)
+                if raw_obj and raw_obj.data:
+                    raw_obj.data.name = obj_name          
                                 
             bpy.ops.object.shade_smooth()
             bpy.context.object.color = setObjColor(i)
@@ -1767,6 +2109,39 @@ class Run_ICP(bpy.types.Operator):
         ICP_coef = scene.ICP_coef
         Aligment_FPFH_coef = scene.Aligment_FPFH_coef
         Process_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
+        
+        bpy.context.window.cursor_set("DEFAULT")
+        return {'FINISHED'}
+
+class Run_7DoF_ICP(bpy.types.Operator):
+    bl_idname = "object.run_7dof_icp"
+    bl_label = "NOP"
+    bl_description = "7DoF ICP with scaling refinement"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        # オブジェクトが選択されているときのみメニューを表示させる
+        if len(bpy.context.selected_objects) == 2:
+            if bpy.context.active_object != None:
+                return True
+        return False
+
+    def execute(self, context):
+        bpy.context.window.cursor_set("WAIT")
+        
+        source_name = bpy.context.active_object.name
+        bpy.context.active_object.data.name = bpy.context.active_object.name
+        for o in bpy.context.selected_objects:
+            if o != bpy.context.active_object:
+                target_name = o.name
+                o.data.name = o.name
+                
+        scene = bpy.context.scene
+        voxel_size = scene.Aligment_voxel_size
+        ICP_coef = scene.ICP_coef
+        Aligment_FPFH_coef = scene.Aligment_FPFH_coef
+        Process_7DoF_ICP(source_name,target_name,voxel_size,ICP_coef, Aligment_FPFH_coef)
         
         bpy.context.window.cursor_set("DEFAULT")
         return {'FINISHED'}
@@ -2141,7 +2516,7 @@ class PROCESS_PT_CustomPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        
+
         layout.use_property_split = True
         layout.use_property_decorate = False  # No animation.
 
@@ -2157,6 +2532,7 @@ class PARTIAL_PROCESS_PT_CustomPanel(bpy.types.Panel):
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
     #bl_context = "objectmode"           # パネルを表示するコンテキスト
     bl_parent_id = "ALIGHMENT_PT_CustomPanel"
+    bl_options = {'DEFAULT_CLOSED'}
 
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
@@ -2177,6 +2553,30 @@ class PARTIAL_PROCESS_PT_CustomPanel(bpy.types.Panel):
         layout.label(text="Propotional Edit")
         layout.prop(scene,"effective_length", text="Eff Length")
         layout.operator(Run_Apply_propotional_edit.bl_idname, text="Apply Deform")
+
+class SCALING_ALIGNMENT_PT_CustomPanel(bpy.types.Panel):
+    bl_label = "Alignment with Scaling"         # パネルのヘッダに表示される文字列
+    bl_space_type = 'VIEW_3D'           # パネルを登録するスペース
+    bl_region_type = 'UI'               # パネルを登録するリージョン
+    bl_category = "Cave Mapper"         # パネルを登録するタブ名
+    #bl_context = "objectmode"           # パネルを表示するコンテキスト
+    bl_parent_id = "ALIGHMENT_PT_CustomPanel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    # ヘッダーのカスタマイズ
+    def draw_header(self, context):
+        layout = self.layout
+
+    # メニューの描画処理
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        layout.use_property_split = True
+        layout.use_property_decorate = False  # No animation.
+
+        #Run Buttom
+        layout.operator(Run_7DoF_ICP.bl_idname, text="7DoF Fine Aligment", icon = 'SORTTIME')
 
 class DECIMATE_PT_CustomPanel(bpy.types.Panel):
     bl_label = "Down sizing"         # パネルのヘッダに表示される文字列
@@ -2268,7 +2668,7 @@ def init_props():
         name="folder path",
         description="folder path of glb files",
         default="",
-        subtype = 'FILE_PATH'
+        subtype = 'DIR_PATH'
     ) 
     scene.Aligment_voxel_size = FloatProperty(
         name="Aligment_voxel_size",
@@ -2422,6 +2822,7 @@ classes = [
     Unzip_glb,
     Run_GR,
     Run_ICP,
+    Run_7DoF_ICP,
     Run_Hrz_fix,
     Run_Set_Target,
     Run_Partial_ICP,
@@ -2437,6 +2838,7 @@ classes = [
     CONFIG_PT_CustomPanel,
     PROCESS_PT_CustomPanel,
     PARTIAL_PROCESS_PT_CustomPanel,
+    SCALING_ALIGNMENT_PT_CustomPanel,
     DECIMATE_PT_CustomPanel,
     REMESH_PT_CustomPanel,
     CROSS_SECTION_PT_CustomPanel
