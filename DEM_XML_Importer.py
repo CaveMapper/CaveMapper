@@ -128,11 +128,16 @@ def calculate_pixel_dimensions(xml_file_path, zoom_level):
         bpy.data.images.load(savename)
     
 
-def process_xml_and_generate_mesh(xml_file_path, northwest_coords):
+def process_xml_and_generate_mesh(xml_file_path, northwest_coords, replace_nodata=False):
     """
     指定されたXMLファイルを解析し、Blenderで地形メッシュを生成
+
+    Parameters:
+    - xml_file_path: XMLファイルのパス
+    - northwest_coords: 北西座標
+    - replace_nodata: Trueの場合、データなし(-9999)を0に置き換える
     """
-    
+
     origin_lat = northwest_coords[0]
     origin_lon = northwest_coords[1]
     
@@ -156,12 +161,22 @@ def process_xml_and_generate_mesh(xml_file_path, northwest_coords):
     north_south_distance = calculate_hubeny(min_lat, min_lon, max_lat, min_lon)
     east_west_distance = calculate_hubeny(min_lat, min_lon, min_lat, max_lon)
 
-    # gml:lowとgml:highからグリッドサイズを取得
+    # gml:lowとgml:highから全体のグリッドサイズを取得
     low = root.find('.//gml:low', namespaces).text.split()
     high = root.find('.//gml:high', namespaces).text.split()
 
+    # 全体のグリッドサイズ（地理的範囲全体）
     grid_size_x = int(high[0]) - int(low[0]) + 1
     grid_size_y = int(high[1]) - int(low[1]) + 1
+
+    # gml:startPointを取得（実際のデータが始まる位置）
+    start_point = root.find('.//gml:startPoint', namespaces).text.split()
+    start_x = int(start_point[0])
+    start_y = int(start_point[1])
+
+    # 実際に生成するメッシュのサイズ（startPointからhighまで）
+    mesh_size_x = int(high[0]) - start_x + 1
+    mesh_size_y = int(high[1]) - start_y + 1
 
     # gml:tupleListから標高データを取得
     tuple_list_element = root.find('.//gml:tupleList', namespaces)
@@ -171,38 +186,49 @@ def process_xml_and_generate_mesh(xml_file_path, northwest_coords):
         for item in tuple_list_text.split('\n')
     ]
 
-    # メッシュデータ準備  
+    # データなし(-9999)を0に置き換える処理
+    if replace_nodata:
+        elevation_data = [0.0 if value == -9999.0 else value for value in elevation_data]
+
+    # メッシュデータ準備
 
     #頂点の作成
-    # numpy配列を作成
-    x_indices = np.arange(grid_size_x)
-    y_indices = np.arange(grid_size_y)
+    # numpy配列を作成（startPointからhighまでの範囲）
+    x_indices = np.arange(mesh_size_x)
+    y_indices = np.arange(mesh_size_y)
     x_grid, y_grid = np.meshgrid(x_indices, y_indices)  # グリッド作成
-    idx = y_grid * grid_size_x + x_grid
-    z_values = np.array(elevation_data)[idx.flatten()] 
-    # X, Y座標の計算
-    original_x = (x_grid + 0.5) * east_west_distance / grid_size_x
-    original_y = (y_grid + 0.5) * north_south_distance / grid_size_y
+
+    # elevation_dataのインデックス
+    idx = y_grid * mesh_size_x + x_grid
+    z_values = np.array(elevation_data)[idx.flatten()]
+
+    # 全体グリッド内での実際の座標（startPointオフセットを加える）
+    actual_x_grid = x_grid + start_x
+    actual_y_grid = y_grid + start_y
+
+    # X, Y座標の計算（全体グリッドサイズを使用）
+    original_x = (actual_x_grid + 0.5) * east_west_distance / grid_size_x
+    original_y = (actual_y_grid + 0.5) * north_south_distance / grid_size_y
     # 座標調整
     adjusted_x = original_x + calculate_hubeny(min_lat, min_lon, min_lat, origin_lon)
     adjusted_y = -original_y - calculate_hubeny(min_lat, min_lon, origin_lat, min_lon)
     # 頂点リストを構築
     verts = np.column_stack((adjusted_x.flatten(), adjusted_y.flatten(), z_values.flatten()))
-    
-    # UV座標
-    u = (x_grid + 0.5) / (grid_size_x + 1)
-    v = 1 - ((y_grid + 0.5) / (grid_size_y + 1))
+
+    # UV座標（全体グリッドサイズを使用）
+    u = (actual_x_grid + 0.5) / grid_size_x
+    v = 1 - ((actual_y_grid + 0.5) / grid_size_y)
     # UV座標をフラット化してリストに変換
     uv_coords = np.column_stack((u.flatten(), v.flatten())).tolist()
 
     #面の作成(これはnumpyよりforで回したほうが早かった)
-    faces = []    
+    faces = []
 
-    for y in range(grid_size_y - 1):
-        for x in range(grid_size_x - 1):
-            v1 = y * grid_size_x + x
+    for y in range(mesh_size_y - 1):
+        for x in range(mesh_size_x - 1):
+            v1 = y * mesh_size_x + x
             v2 = v1 + 1
-            v3 = v1 + grid_size_x
+            v3 = v1 + mesh_size_x
             v4 = v3 + 1
             faces.append((v1, v2, v4, v3))
 
@@ -376,7 +402,7 @@ def install_packeage(package_name,target_version):
 bl_info = {
     "name": "DEM XML Importer",
     "author": "Cave Mapper",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "国土地理院webサイトから取得したxml形式の数値標高モデルをBlenderに取り込む",
@@ -409,10 +435,14 @@ class DEM_XML_PT_CustomPanel(bpy.types.Panel):
         if is_static_map == True:
             layout.separator()
             layout.prop(context.scene, "get_texture", text="テクスチャを取得する")
-            
+
             row = layout.row()
             row.label(text="ズームレベル:")  # テキストを追加
             row.prop(context.scene, "zoom_level", text="")  # ボックスのみを表示
+
+        layout.separator()
+        layout.prop(context.scene, "replace_nodata_with_zero", text="データなしを0に置換")
+        layout.separator()
 
         layout.operator("demxml.folder_file_operator", text="フォルダ指定xml読込", icon='SORTTIME')
 
@@ -453,10 +483,10 @@ class DEMXML_OT_FolderFileOperator(bpy.types.Operator):
         northwest_coords = get_northwest_coordinates(xml_files)
         
         """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-        MAIN 
+        MAIN
         """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-        for xml_file in xml_files:           
-            process_xml_and_generate_mesh(xml_file, northwest_coords)
+        for xml_file in xml_files:
+            process_xml_and_generate_mesh(xml_file, northwest_coords, context.scene.replace_nodata_with_zero)
 
             print(f"context.scene.get_texture: {context.scene.get_texture}")
             if lib_ver_checker('staticmap') == '0.5.6':
@@ -535,6 +565,12 @@ def register():
         max=18  # 最大値
     )
 
+    bpy.types.Scene.replace_nodata_with_zero = bpy.props.BoolProperty(
+        name="replace_nodata_with_zero",
+        description="データなし(-9999)の値を0に置き換えてメッシュを生成します",
+        default=False
+    )
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -549,6 +585,7 @@ def unregister():
 
     del bpy.types.Scene.get_texture
     del bpy.types.Scene.zoom_level
+    del bpy.types.Scene.replace_nodata_with_zero
 
 if __name__ == "__main__":
     register()
