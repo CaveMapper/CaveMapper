@@ -1963,7 +1963,7 @@ def unzip_files(folder_path):
 bl_info = {
     "name": "Cave Mapper",
     "author": "Cave Mapper",
-    "version": (2, 3, 15),
+    "version": (2, 3, 16),
     "blender": (4, 0, 2),
     "location": "3D View > Sidebar",
     "description": "Help to handle 3D scan datas of cave",
@@ -2661,6 +2661,200 @@ class CROSS_SECTION_PT_CustomPanel(bpy.types.Panel):
         layout.prop(scene, "outline_tickness", text="Line tickness")
         layout.operator(Run_cs_bake_and_composite.bl_idname, text="Generate Images", icon = 'SORTTIME')
 
+#################################################################################
+# Edge Length Measurement
+class Run_Edge_Measure(bpy.types.Operator):
+    bl_idname = "object.run_edge_measure"
+    bl_label = "Measure Edge Length"
+    bl_description = "Measure edge length of selected object or edges"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        # オブジェクトが1つ選択されているときのみボタンを有効化
+        return len(bpy.context.selected_objects) == 1
+
+    def execute(self, context):
+        import bmesh
+        scene = context.scene
+        obj = context.active_object
+
+        # 結果をクリア
+        scene.edge_measure_line1 = ""
+        scene.edge_measure_line2 = ""
+        scene.edge_measure_line3 = ""
+        scene.edge_measure_line4 = ""
+        scene.edge_measure_line5 = ""
+        scene.edge_measure_line6 = ""
+
+        if obj is None or obj.type != 'MESH':
+            scene.edge_measure_line1 = "Error: No mesh object selected"
+            return {'FINISHED'}
+
+        # オブジェクトモードかエディットモードかを判定
+        if context.mode == 'OBJECT':
+            # オブジェクトモード
+            mesh = obj.data
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+
+            vert_count = len(bm.verts)
+            edge_count = len(bm.edges)
+
+            # エッジ長さの合計を計算
+            total_length = 0.0
+            for edge in bm.edges:
+                total_length += edge.calc_length()
+
+            bm.free()
+
+            # 結果を表示
+            scene.edge_measure_line1 = f"Vertices: {vert_count}"
+            scene.edge_measure_line2 = f"Edges: {edge_count}"
+            scene.edge_measure_line3 = f"Total Length: {total_length:.4f}"
+
+        elif context.mode == 'EDIT_MESH':
+            # エディットモード
+            mesh = obj.data
+            bm = bmesh.from_edit_mesh(mesh)
+
+            # 選択モードを確認
+            select_mode = context.tool_settings.mesh_select_mode
+
+            if not select_mode[1]:  # エッジ選択モードでない場合
+                scene.edge_measure_line1 = "Please switch to Edge Select Mode"
+                return {'FINISHED'}
+
+            # 選択されているエッジの情報
+            selected_edges = [e for e in bm.edges if e.select]
+            selected_verts = set()
+            selected_length = 0.0
+
+            for edge in selected_edges:
+                selected_length += edge.calc_length()
+                selected_verts.add(edge.verts[0])
+                selected_verts.add(edge.verts[1])
+
+            # 全体の情報
+            total_vert_count = len(bm.verts)
+            total_edge_count = len(bm.edges)
+            total_length = 0.0
+            for edge in bm.edges:
+                total_length += edge.calc_length()
+
+            # 結果を表示
+            scene.edge_measure_line1 = f"Selected Vertices: {len(selected_verts)}"
+            scene.edge_measure_line2 = f"Selected Edges: {len(selected_edges)}"
+            scene.edge_measure_line3 = f"Selected Length: {selected_length:.4f}"
+            scene.edge_measure_line4 = f"Total Vertices: {total_vert_count}"
+            scene.edge_measure_line5 = f"Total Edges: {total_edge_count}"
+            scene.edge_measure_line6 = f"Total Length: {total_length:.4f}"
+
+        return {'FINISHED'}
+
+class EDGE_LENGTH_PT_CustomPanel(bpy.types.Panel):
+    bl_label = "Edge Length"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Cave Mapper"
+
+    def draw_header(self, context):
+        layout = self.layout
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        layout.use_property_split = False
+        layout.use_property_decorate = False
+
+        # Measureボタン
+        layout.operator(Run_Edge_Measure.bl_idname, text="Measure", icon='DRIVER_DISTANCE')
+
+        # 測定結果表示用のスペース（6行）
+        if scene.edge_measure_line1:
+            layout.label(text=scene.edge_measure_line1)
+        if scene.edge_measure_line2:
+            layout.label(text=scene.edge_measure_line2)
+        if scene.edge_measure_line3:
+            layout.label(text=scene.edge_measure_line3)
+        if scene.edge_measure_line4:
+            layout.label(text=scene.edge_measure_line4)
+        if scene.edge_measure_line5:
+            layout.label(text=scene.edge_measure_line5)
+        if scene.edge_measure_line6:
+            layout.label(text=scene.edge_measure_line6)
+
+#################################################################################
+# 選択状態監視用のグローバル変数
+_edge_measure_selection_state = {
+    "mode": None,
+    "selected_objects": [],
+    "selected_edges": []
+}
+
+def clear_edge_measure_display():
+    """測定結果の表示をクリア"""
+    scene = bpy.context.scene
+    scene.edge_measure_line1 = ""
+    scene.edge_measure_line2 = ""
+    scene.edge_measure_line3 = ""
+    scene.edge_measure_line4 = ""
+    scene.edge_measure_line5 = ""
+    scene.edge_measure_line6 = ""
+
+@bpy.app.handlers.persistent
+def selection_change_handler(scene):
+    """選択状態の変化を監視して、変化があれば表示をクリア"""
+    global _edge_measure_selection_state
+
+    try:
+        context = bpy.context
+
+        # 現在のモードを取得
+        current_mode = context.mode
+
+        # 選択されているオブジェクトを取得
+        current_selected_objects = [obj.name for obj in context.selected_objects]
+
+        # 選択されているエッジを取得（エディットモードの場合）
+        current_selected_edges = []
+        if current_mode == 'EDIT_MESH' and context.active_object:
+            import bmesh
+            obj = context.active_object
+            if obj.type == 'MESH':
+                bm = bmesh.from_edit_mesh(obj.data)
+                current_selected_edges = [e.index for e in bm.edges if e.select]
+
+        # 前回の状態と比較
+        state_changed = False
+
+        # モードが変わった場合
+        if _edge_measure_selection_state["mode"] != current_mode:
+            state_changed = True
+
+        # 選択オブジェクトが変わった場合
+        elif set(_edge_measure_selection_state["selected_objects"]) != set(current_selected_objects):
+            state_changed = True
+
+        # エディットモードで選択エッジが変わった場合
+        elif current_mode == 'EDIT_MESH':
+            if set(_edge_measure_selection_state["selected_edges"]) != set(current_selected_edges):
+                state_changed = True
+
+        # 状態が変化した場合、表示をクリア
+        if state_changed:
+            clear_edge_measure_display()
+
+        # 現在の状態を保存
+        _edge_measure_selection_state["mode"] = current_mode
+        _edge_measure_selection_state["selected_objects"] = current_selected_objects
+        _edge_measure_selection_state["selected_edges"] = current_selected_edges
+
+    except Exception:
+        # エラーが発生してもハンドラーが停止しないようにする
+        pass
+
 # プロパティの初期化
 def init_props():
     scene = bpy.types.Scene
@@ -2792,6 +2986,37 @@ def init_props():
         min=0,
         subtype = 'DISTANCE'
     )
+    # Edge Length measurement results
+    scene.edge_measure_line1 = StringProperty(
+        name="edge_measure_line1",
+        description="Edge measurement result line 1",
+        default=""
+    )
+    scene.edge_measure_line2 = StringProperty(
+        name="edge_measure_line2",
+        description="Edge measurement result line 2",
+        default=""
+    )
+    scene.edge_measure_line3 = StringProperty(
+        name="edge_measure_line3",
+        description="Edge measurement result line 3",
+        default=""
+    )
+    scene.edge_measure_line4 = StringProperty(
+        name="edge_measure_line4",
+        description="Edge measurement result line 4",
+        default=""
+    )
+    scene.edge_measure_line5 = StringProperty(
+        name="edge_measure_line5",
+        description="Edge measurement result line 5",
+        default=""
+    )
+    scene.edge_measure_line6 = StringProperty(
+        name="edge_measure_line6",
+        description="Edge measurement result line 6",
+        default=""
+    )
 
 
 # プロパティを削除
@@ -2816,6 +3041,12 @@ def clear_props():
     del scene.union_bake_extrusion
     del scene.union_bake_max_ray_distance
     del scene.island_margin
+    del scene.edge_measure_line1
+    del scene.edge_measure_line2
+    del scene.edge_measure_line3
+    del scene.edge_measure_line4
+    del scene.edge_measure_line5
+    del scene.edge_measure_line6
 
 classes = [
     import_models,
@@ -2833,6 +3064,7 @@ classes = [
     Run_Bake_Texture,
     Run_cs_model_pre_prs,
     Run_cs_bake_and_composite,
+    Run_Edge_Measure,
     IMPORT_PT_CustomPanel,
     ALIGHMENT_PT_CustomPanel,
     CONFIG_PT_CustomPanel,
@@ -2841,7 +3073,8 @@ classes = [
     SCALING_ALIGNMENT_PT_CustomPanel,
     DECIMATE_PT_CustomPanel,
     REMESH_PT_CustomPanel,
-    CROSS_SECTION_PT_CustomPanel
+    CROSS_SECTION_PT_CustomPanel,
+    EDGE_LENGTH_PT_CustomPanel
 ]
 
 
@@ -2850,6 +3083,9 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     init_props()
+    # 選択状態監視ハンドラーを登録
+    if selection_change_handler not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(selection_change_handler)
     print("add on is registerd")
 
 
@@ -2857,6 +3093,9 @@ def unregister():
     clear_props()
     for c in classes:
         bpy.utils.unregister_class(c)
+    # 選択状態監視ハンドラーを解除
+    if selection_change_handler in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(selection_change_handler)
     print("add on is unregisterd")
 
 
