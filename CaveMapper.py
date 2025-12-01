@@ -2453,7 +2453,7 @@ class IMPORT_PT_CustomPanel(bpy.types.Panel):
         
         layout.label(text="Folder Path:")
         layout.prop(scene,"folder_path",text = "")
-        layout.operator(Unzip_glb.bl_idname, text="Ungip glb files", icon = 'SORTTIME')
+        layout.operator(Unzip_glb.bl_idname, text="Unzip glb files", icon = 'SORTTIME')
         layout.operator(import_models.bl_idname, text="Import Models", icon = 'SORTTIME')
 
 class ALIGHMENT_PT_CustomPanel(bpy.types.Panel):
@@ -2638,7 +2638,8 @@ class CROSS_SECTION_PT_CustomPanel(bpy.types.Panel):
     bl_region_type = 'UI'               # パネルを登録するリージョン
     bl_category = "Cave Mapper"         # パネルを登録するタブ名
     #bl_context = "objectmode"           # パネルを表示するコンテキスト
-    
+    bl_options = {'DEFAULT_CLOSED'}
+
     # ヘッダーのカスタマイズ
     def draw_header(self, context):
         layout = self.layout
